@@ -1,0 +1,25 @@
+
+.dss-plain-answer { background: #ffffff; border: 1px solid #dce4eb; border-left: 5px solid #147783;
+  border-radius: 0.95rem; box-shadow: 0 1px 2px rgba(8,35,73,0.025); margin: 0 0 1.2rem; padding: 1.1rem 1.35rem; }
+.dss-plain-answer-eyebrow { color: #147783; font-size: 0.74rem; font-weight: 800; letter-spacing: 0.14em;
+  text-transform: uppercase; }
+.dss-plain-answer-text { color: #102a59; font-size: 1.04rem; line-height: 1.6; margin-top: 0.45rem; }
+.dss-caveat-line { border-top: 1px solid #e4eaee; color: #5c7390; font-size: 0.88rem; line-height: 1.5;
+  margin: 1.2rem 0 0.4rem; padding-top: 0.8rem; }
+.dss-peso-base { background: #edf4fb; border: 1px solid #d8e5f1; border-radius: 0.75rem; color: #14365f;
+  font-size: 0.95rem; line-height: 1.55; margin: 0.4rem 0 1rem; padding: 0.8rem 1rem; }
+.dss-evidence-note { background: #f7fafb; border: 1px solid #dce5ea; border-radius: 0.75rem; color: #14365f;
+  font-size: 0.95rem; line-height: 1.55; margin: 0.4rem 0 1rem; padding: 0.8rem 1rem; }
+.dss-queue-card { background: #ffffff; border: 1px solid #dce4eb; border-radius: 0.95rem; min-height: 9.5rem;
+  padding: 1rem 1.15rem; }
+.dss-queue-count { color: #102a59; font-size: 2rem; font-weight: 800; letter-spacing: -0.04em; }
+.dss-queue-title { color: #102a59; font-size: 0.98rem; font-weight: 750; margin-top: 0.2rem; }
+.dss-queue-population { color: #66778a; font-size: 0.86rem; line-height: 1.45; margin-top: 0.35rem; }
+/* Teal accent for selection widgets (Streamlit's default accent is red). */
+[data-testid="stTab"][aria-selected="true"], [data-testid="stTab"][aria-selected="true"] p,
+[data-testid="stTab"][data-selected="true"], [data-testid="stTab"][data-selected="true"] p { color: #147783 !important; }
+[data-testid="stTab"] .react-aria-SelectionIndicator { background-color: #147783 !important; }
+[data-testid="stRadioOption"][data-selected="true"] > div > div > div:first-child {
+  background-color: #147783 !important; border-color: #147783 !important; }
+[data-testid="stCheckbox"] label[data-selected="true"] > div:first-of-type { background-color: #147783 !important; }
+[data-testid="stSliderThumbValue"], [data-testid="stSliderThumbValue"] p { color: #147783 !important; }

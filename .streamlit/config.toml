@@ -1,0 +1,18 @@
+# Fixed light theme. The app's own CSS (app/ui_clone.css, app/main.py) is a light design, so Streamlit
+# must not switch its widgets, tables and charts to dark when the operating system is in dark mode.
+# Hex values are the ones already used by the app CSS:
+#   primary teal #1f6f78, page canvas #f3f7f8, sidebar/secondary #eff4f5, ink #14264a, line #e3e8eb.
+[theme]
+base = "light"
+primaryColor = "#1f6f78"
+backgroundColor = "#f3f7f8"
+secondaryBackgroundColor = "#eff4f5"
+textColor = "#14264a"
+linkColor = "#1f6f78"
+borderColor = "#e3e8eb"
+dataframeBorderColor = "#e3e8eb"
+dataframeHeaderBackgroundColor = "#eaf3f3"
+
+[theme.sidebar]
+backgroundColor = "#eff4f5"
+secondaryBackgroundColor = "#ffffff"

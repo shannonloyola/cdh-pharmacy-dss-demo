@@ -10,7 +10,12 @@ machine, on CDH's own data, and is not published here.
 
 ## Files
 
-- `app/capstone1_app.py`: the Streamlit app, run in DEMO mode.
+- `app/capstone1_app.py`: the Streamlit app, run in DEMO mode (five pages: Overview, Reorder Planning, Waste and
+  Expiry, Medicine Detail, Analysis and Evidence).
+- `app/c1_ui.py`, `app/ui_*.py`, `app/ui_*.css`, `app/ui_clone_table.js`: the app's visual system (styles, tiles,
+  cards, filter bars, tables).
+- `app/assets/`: the Inter font files and their licence (SIL Open Font License, `INTER-LICENSE.txt`).
+- `.streamlit/config.toml`: the light theme.
 - `demo/capstone1_demo.duckdb`: the synthetic data mart the app reads (read-only).
 - `requirements.txt`: every package, locked for Python 3.14.
 

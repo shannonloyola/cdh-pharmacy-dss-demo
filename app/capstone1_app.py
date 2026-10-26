@@ -2,13 +2,15 @@
 
     streamlit run app/capstone1_app.py
 
-Pages, in order: the six dashboard pages of Table 3.8.1.1 and the data-quality page (section "Inpatient pharmacy
-planning"), then the existing DSS pages of app/main.py under "Supplementary analysis", their content unchanged.
-app/main.py still runs on its own (streamlit run app/main.py).
+Five pages, in order: Overview, Reorder Planning, Waste and Expiry, Medicine Detail, Analysis and Evidence. They hold
+every output of the eight earlier planning pages (the six dashboard pages of Table 3.8.1.1, Data Quality and the KPIs),
+moved, not changed. The existing DSS pages of app/main.py sit at the bottom of the sidebar under "Earlier annual
+analysis", a collapsed group, their content unchanged. app/main.py still runs on its own (streamlit run app/main.py).
 
-The Capstone 1 pages read the Capstone 1 data mart (database/staging/capstone1/capstone1.duckdb, or the path in
-CAPSTONE1_DB) read-only; the supplementary pages read the existing DSS database as app/main.py does. The pages show
-planning estimates for review by pharmacy and purchasing personnel; they place no orders and rank no option.
+The look is the existing app's visual system (app/c1_ui.py). The planning pages read the Capstone 1 data mart
+(database/staging/capstone1/capstone1.duckdb, or the path in CAPSTONE1_DB) read-only; the earlier pages read the
+existing DSS database as app/main.py does. The pages show planning estimates for review by pharmacy and purchasing
+personnel; they place no orders and rank no option.
 """
 
 from __future__ import annotations
@@ -23,14 +25,19 @@ import duckdb
 import pandas as pd
 import streamlit as st
 
+import c1_ui
+from c1_ui import card, filter_bar, show_table, tiles
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAIN_APP = Path(__file__).resolve().parent / "main.py"
 DATABASE = Path(os.environ.get("CAPSTONE1_DB", PROJECT_ROOT / "database" / "staging" / "capstone1" / "capstone1.duckdb"))
-PLANNING_SECTION, SUPPLEMENTARY_SECTION = "Inpatient pharmacy planning", "Supplementary analysis"
+PLANNING_SECTION, EARLIER_GROUP = "Inpatient pharmacy planning", "Earlier annual analysis"
+# Sidebar labels of earlier pages that differ from their page name (the page itself is unchanged).
+EARLIER_LABELS = {"Overview": "Annual overview"}
 # DEMO mode (CAPSTONE1_DEMO=1): the mart is the synthetic one (src/capstone1/demo_data.py), every page says so, and the
-# supplementary pages, which need the governed DSS database (CDH data), are left out.
+# earlier pages, which need the governed DSS database (CDH data), are left out.
 DEMO = os.environ.get("CAPSTONE1_DEMO") == "1"
-# The supplementary pages need the existing DSS database; a deployment without it sets CAPSTONE1_SUPPLEMENTARY=0.
+# The earlier pages need the existing DSS database; a deployment without it sets CAPSTONE1_SUPPLEMENTARY=0.
 SHOW_SUPPLEMENTARY = not DEMO and os.environ.get("CAPSTONE1_SUPPLEMENTARY", "1") == "1"
 DEMO_NOTE = ("Demonstration data: synthetic medicines, demand, stock, costs and expiry lots, generated with a fixed "
              "seed. Not CDH data; no figure on this page describes Calamba Doctors Hospital.")
@@ -42,14 +49,29 @@ SUDDEN_CHANGE_NOTE = ("Forecasts follow the patterns in the 2021-2025 records (a
                       "behavior may not be captured.")
 REVIEW_STATUSES = ["below safety stock", "at or below ROP (reorder review)"]
 NEAR_COLUMNS = ["Near_Expiry_Lots", "Near_Expiry_Quantity_Capped", "Near_Expiry_Value_Capped"]
-
-
-FORM_FILTER_KEY = "dosage_form_filter"
+REORDER_COLUMNS = ["Brand_Name", "Unit", "Dosage_Form", "ABC_Planning", "VED", "Planning_Stock", "Stock_Status",
+                   "Safety_Stock", "Reorder_Point", "EOQ", "Forecast_Planning_Month", "Reorder_Status", "Reliability",
+                   "Planning_Label"]
+FORECAST_COLUMNS = ["Brand_Name", "Dosage_Form", "ABC_Planning", "Selected_Model", "Volume_Class", "Test_MAE",
+                    "Test_RMSE", "Test_MAPE", "Test_MAPE_Excluded_Zero_Months", "Test_WAPE", "Test_MASE", "Reliability",
+                    "Prospective_2026_MAE", "Limited_Planning_Estimate"]
+ABC_COLUMNS = ["Brand_Name", "Dosage_Form", "ABC_2021", "ABC_2022", "ABC_2023", "ABC_2024", "ABC_2025", "ABC_2021_2025",
+               "ABC_Planning", "VED"]
+FLAGGED_COLUMNS = ["Brand_Name", "Unit", "Month", "Net_Demand", "Item_Average", "Rule", "Period_Label"]
+SENSITIVITY_COLUMNS = ["Scenario_Type", "Scenario", "Baseline_Safety_Stock", "Adjusted_Safety_Stock", "Baseline_ROP",
+                       "Adjusted_ROP", "Change_ROP_Pct", "Baseline_EOQ", "Adjusted_EOQ", "Change_EOQ_Pct"]
+GRID_COLUMNS = ["Lead_Time_Days", "Service_Level", "Holding_Rate", "Safety_Stock", "Reorder_Point", "EOQ"]
+ABC_ORDER = {"A": 0, "B": 1, "C": 2}
+FIRST_ROWS = 10
+FLAGGED_CAPTION = ("Pandemic period: a month of 2022-2023 flagged by the outlier rule (more than 100% above or 50% below "
+                   "the item average), replaced by that average in training only and listed here for review.")
+GRID_CAPTION = ("Every combination of lead time 3/7/14 days, service level 90/95/99% and holding-cost rate 15/20/25%; "
+                "the baseline is 7 days, 95% and 20%.")
 
 
 @st.cache_data(show_spinner=False)
-def _load(name: str) -> pd.DataFrame:
-    connection = duckdb.connect(str(DATABASE), read_only=True)
+def _load(database: str, modified: int, name: str) -> pd.DataFrame:
+    connection = duckdb.connect(database, read_only=True)
     try:
         return connection.execute(f'SELECT * FROM "{name}"').df()
     finally:
@@ -57,22 +79,13 @@ def _load(name: str) -> pd.DataFrame:
 
 
 def table(name: str) -> pd.DataFrame:
-    """A mart table or view; medicine-level ones (with a Dosage_Form column) are filtered by the sidebar's forms."""
-    frame = _load(name)
-    chosen = st.session_state.get(FORM_FILTER_KEY) or []
-    if chosen and "Dosage_Form" in frame:
-        frame = frame[frame.Dosage_Form.isin(chosen)]
-    return frame
+    """A mart table or view, read-only; cached per mart file and its modification time, so a rebuilt mart, or another
+    mart, is read afresh."""
+    return _load(str(DATABASE), DATABASE.stat().st_mtime_ns, name)
 
 
-def form_filter() -> None:
-    """The dosage-form filter, shared by every planning page (draft groups pending the pharmacist)."""
-    forms = sorted(_load("c1_tab_reorder").get("Dosage_Form", pd.Series(dtype=str)).dropna().unique())
-    if forms:
-        st.sidebar.multiselect("Dosage form", forms, key=FORM_FILTER_KEY,
-                               help="Draft groups from the unit and name, pending the chief pharmacist. Applies to "
-                                    "the medicine tables and the charts drawn from them; the Stock Health totals and "
-                                    "the stock-value trend cover every form.")
+def present(frame: pd.DataFrame, columns: list[str]) -> list[str]:
+    return [c for c in columns if c in frame]
 
 
 def as_of_line(frame: pd.DataFrame) -> None:
@@ -80,62 +93,183 @@ def as_of_line(frame: pd.DataFrame) -> None:
         st.caption(f"Stock as of the month-end of {frame.As_Of_Month.iloc[0]} (latest PHARMACY export).")
 
 
-def kpi_row(items: list[tuple[str, object]]) -> None:
-    for column, (label, value) in zip(st.columns(len(items)), items):
-        column.metric(label, value)
+def by_class_then(frame: pd.DataFrame, measure: pd.Series, ascending: bool) -> pd.DataFrame:
+    """ABC class A, B, C, then the list's own measure, then the name: the order of the first rows on the Overview."""
+    order = frame.assign(_class=frame.ABC_Planning.map(ABC_ORDER).fillna(len(ABC_ORDER)), _measure=measure)
+    return order.sort_values(["_class", "_measure", "Brand_Name"], ascending=[True, ascending, True],
+                             na_position="last").drop(columns=["_class", "_measure"])
 
 
-def stock_health() -> None:
+def rows_for(frame: pd.DataFrame, key: object, name: str) -> pd.DataFrame:
+    """One medicine's rows: by Medicine_Key where the table has it, else by brand name."""
+    return frame[frame.Medicine_Key.eq(key)] if "Medicine_Key" in frame else frame[frame.Brand_Name.eq(name)]
+
+
+def first_value(frame: pd.DataFrame, column: str) -> object:
+    return frame[column].iloc[0] if column in frame and len(frame) and pd.notna(frame[column].iloc[0]) else "not available"
+
+
+# ------------------------------------------------------------------ Overview
+
+def action_list(title: str, frame: pd.DataFrame, columns: list[str], order: str, target: str, key: str) -> None:
+    st.subheader(title)
+    st.caption(f"First {min(FIRST_ROWS, len(frame))} of {len(frame)}, ordered by {order}.")
+    if len(frame):
+        c1_ui.first_rows_table(frame[present(frame, columns)], key=f"overview-{key}", rows=FIRST_ROWS)
+    st.page_link(PAGES[target], label=f"Full list: {target}")
+
+
+def overview() -> None:
     health = table("c1_tab_stock_health")
+    reorder = table("c1_tab_reorder")
+    review = table("c1_tab_waste_review")
+    near = table("c1_tab_near_expiry")
     as_of_line(health)
-    values = health.set_index("Metric").Value
-    kpi_row([(m, values[m]) for m in ("Active medicines (demand in the last 12 months)", "Class A medicines (2025)",
-                                       "Reorder review count", "Near-expiry count") if m in values])
-    trend = table("c1_tab_stock_trend")
-    st.subheader("Stock value at month-end (PHP)")
-    st.line_chart(trend.set_index("Month").Stock_Value)
-    st.dataframe(health[["Metric", "Value", "Note"]], hide_index=True, width="stretch")
+    values = health.set_index("Metric").Value if len(health) else pd.Series(dtype=object)
+    in_review = reorder.Reorder_Status.isin(REVIEW_STATUSES)
+    below = reorder.Reorder_Status.eq("below safety stock")
+    with card("action-counts"):
+        tiles("actions", [("At or below ROP", int(in_review.sum()), "procurement"),
+                          ("Below safety stock", int(below.sum()), "attention"),
+                          ("Slow-moving", int(review.Slow_Moving.sum()), "expiry"),
+                          ("Excess stock", int(review.Excess_Stock.sum()), "expiry"),
+                          *[(m, values[m], "expiry") for m in ("Near-expiry count",) if m in values]])
+    with card("action-lists"):
+        action_list("At or below ROP", by_class_then(reorder[in_review], reorder.Planning_Stock - reorder.Reorder_Point,
+                                                     True),
+                    ["Brand_Name", "Unit", "ABC_Planning", "Planning_Stock", "Reorder_Point", "Reorder_Status"],
+                    "ABC class, then planning stock minus ROP (lowest first)", "Reorder Planning", "at-or-below-rop")
+        action_list("Below safety stock", by_class_then(reorder[below], reorder.Planning_Stock - reorder.Safety_Stock,
+                                                        True),
+                    ["Brand_Name", "Unit", "ABC_Planning", "Planning_Stock", "Safety_Stock", "Reorder_Status"],
+                    "ABC class, then planning stock minus safety stock (lowest first)", "Reorder Planning",
+                    "below-safety-stock")
+        slow = review[review.Slow_Moving.fillna(False).astype(bool)]
+        excess = review[review.Excess_Stock.fillna(False).astype(bool)]
+        action_list("Slow-moving", by_class_then(slow, slow.Months_Of_Cover, False),
+                    ["Brand_Name", "Unit", "ABC_Planning", "Planning_Stock", "Months_Of_Cover", "Review_Reason"],
+                    "ABC class, then months of cover (highest first)", "Waste and Expiry", "slow-moving")
+        action_list("Excess stock", by_class_then(excess, excess.Months_Of_Cover, False),
+                    ["Brand_Name", "Unit", "ABC_Planning", "Planning_Stock", "Months_Of_Cover", "Review_Reason"],
+                    "ABC class, then months of cover (highest first)", "Waste and Expiry", "excess-stock")
+        if len(near):
+            st.caption(near.Label.iloc[0])
+        action_list("Near-expiry (180 days)", near.sort_values(["Near_Expiry_Value_Capped", "Brand_Name"],
+                                                               ascending=[False, True]),
+                    ["Brand_Name", "Unit", "Near_Expiry_Lots", "First_Expiry", "Near_Expiry_Value_Capped"],
+                    "capped near-expiry value (highest first)", "Waste and Expiry", "near-expiry")
+    with card("data-checks", "Data Quality"):
+        data_check_status()
+    with card("stock-health", "Stock Health Overview"):
+        tiles("stock-health", [(m, values[m], icon) for m, icon in (
+            ("Active medicines (demand in the last 12 months)", "medicine"), ("Class A medicines (2025)", "validation"),
+            ("Reorder review count", "procurement"), ("Near-expiry count", "expiry")) if m in values])
+        trend = table("c1_tab_stock_trend")
+        st.subheader("Stock value at month-end (PHP)")
+        c1_ui.line_chart(trend.set_index("Month").Stock_Value)
+        show_table(health[["Metric", "Value", "Note"]])
 
 
-def stockout_reorder() -> None:
+def data_check_status() -> None:
+    dq = table("c1_dq_summary")
+    inactive = table("c1_dq_inactive")
+    missing = table("c1_dq_expiry_missing")
+    tiles("data-checks", [("Inactive (no stock, no demand)", len(inactive), "check"),
+                          ("Negative stock records",
+                           int(dq.set_index("Check").Count.get("Negative stock records (month-ends)", 0)), "attention")])
+    if len(missing):
+        st.warning(f"{len(missing)} expiry exports are needed for near-expiry and are not on disk.")
+    st.page_link(PAGES["Analysis and Evidence"], label="Full checks: Analysis and Evidence")
+
+
+# ------------------------------------------------------------------ Reorder Planning
+
+def reorder_planning() -> None:
     reorder = table("c1_tab_reorder")
     as_of_line(reorder)
     in_review = reorder.Reorder_Status.isin(REVIEW_STATUSES)
-    kpi_row([("At or below ROP", int(in_review.sum())), ("Vital below ROP", "pending pharmacist"),
-             ("Stock record negative", int(reorder.Reorder_Status.eq("stock record negative").sum()))])
-    st.subheader("Medicines by reorder status")
-    st.bar_chart(reorder.Reorder_Status.value_counts())
-    show_all = st.checkbox("Show every medicine", value=False, key="reorder_all")
-    view = reorder if show_all else reorder[in_review | reorder.Reorder_Status.eq("stock record negative")]
-    st.dataframe(view[["Brand_Name", "Unit", "Dosage_Form", "ABC_Planning", "VED", "Planning_Stock", "Stock_Status", "Safety_Stock",
-                       "Reorder_Point", "EOQ", "Forecast_Planning_Month", "Reorder_Status", "Reliability",
-                       "Planning_Label"]].sort_values("Brand_Name"), hide_index=True, width="stretch")
+    with card("reorder"):
+        tiles("reorder", [("At or below ROP", int(in_review.sum()), "procurement"),
+                          ("Vital below ROP", "pending pharmacist", "attention"),
+                          ("Stock record negative", int(reorder.Reorder_Status.eq("stock record negative").sum()),
+                           "attention")])
+        st.subheader("Medicines by reorder status")
+        c1_ui.bar_chart(reorder.Reorder_Status.value_counts())
+        view = filter_bar(reorder, "reorder", status="Reorder_Status")
+        show_table(view[present(view, REORDER_COLUMNS)].sort_values("Brand_Name"))
+    with c1_ui.collapsible("what-if", "What if?"):
+        what_if()
 
+
+def what_if() -> None:
+    """The sensitivity content: one medicine's baseline and adjusted levels side by side, its scenarios (lead time,
+    service level, holding rate and demand), the sensitivity grid and the planning assumptions."""
+    sensitivity = table("c1_tab_sensitivity")
+    assumptions = table("c1_tab_assumptions")
+    as_of_line(sensitivity)
+    names = sorted(sensitivity.Brand_Name.dropna().unique())
+    picked = c1_ui.picker("Medicine", names, key="sensitivity_medicine") if names else None
+    view = sensitivity[sensitivity.Brand_Name.eq(picked)] if picked else sensitivity.iloc[0:0]
+    if len(view):
+        baseline, adjusted = st.columns(2)
+        with baseline:
+            st.markdown("**Baseline**")
+            tiles("what-if-baseline", [("Baseline ROP", f"{view.Baseline_ROP.iloc[0]:,.1f}", "procurement"),
+                                       ("Baseline EOQ", f"{view.Baseline_EOQ.iloc[0]:,.1f}", "procurement"),
+                                       ("Baseline safety stock", f"{view.Baseline_Safety_Stock.iloc[0]:,.1f}",
+                                        "governance")])
+        with adjusted:
+            st.markdown("**Adjusted**")
+            labels = (view.Scenario_Type.astype(str) + ": " + view.Scenario.astype(str)).tolist()
+            row = view.iloc[st.selectbox("Scenario", range(len(view)), format_func=labels.__getitem__,
+                                         key=f"sensitivity_scenario-{picked}")]
+            tiles("what-if-adjusted", [("Adjusted ROP", f"{row.Adjusted_ROP:,.1f}", "procurement"),
+                                       ("Adjusted EOQ", f"{row.Adjusted_EOQ:,.1f}", "procurement"),
+                                       ("Adjusted safety stock", f"{row.Adjusted_Safety_Stock:,.1f}", "governance")])
+        c1_ui.bar_chart(view.set_index("Scenario").Change_ROP)
+    show_table(view[present(view, SENSITIVITY_COLUMNS)])
+    st.subheader("Sensitivity grid: lead time x service level x holding rate")
+    st.caption(GRID_CAPTION)
+    grid = table("c1_tab_sensitivity_grid")
+    own = grid[grid.Brand_Name.eq(picked)] if picked else grid.iloc[0:0]
+    show_table(own[GRID_COLUMNS])
+    st.subheader("Planning assumptions")
+    show_table(assumptions)
+
+
+# ------------------------------------------------------------------ Waste and Expiry
 
 def waste_expiry() -> None:
     review = table("c1_tab_waste_review")
     as_of_line(review)
     near = review.Near_Expiry_Status.iloc[0] if len(review) else "not available"
-    kpi_row([("Slow-moving", int(review.Slow_Moving.sum())), ("Excess stock", int(review.Excess_Stock.sum())),
-             ("Near-expiry (180 days)", "not available" if near != "available" else "see table")])
-    if near != "available":
-        st.warning(f"Near-expiry: {near}.")
-        missing = table("c1_dq_expiry_missing")
-        if len(missing):
-            st.caption("Expiry exports needed for near-expiry: " + ", ".join(missing.Expected_File) + ".")
-    near_expiry_section()
-    st.subheader("Expired value by month (PHP; upper bound, unmatched lots excluded)")
-    timeline = table("c1_tab_expiry_timeline")
-    st.bar_chart(timeline.set_index("Month").Expired_Value_Capped)
-    st.caption("Expired value: the received quantity of each lot expiring in the month, capped at the medicine's "
-               "stock at that month-end, x land cost. An upper bound: the exports do not record what was left of "
-               "each lot. Lots not matched to a PHARMACY medicine are excluded (see Data Quality).")
-    st.caption("Review list: medicines with planning stock above 0. Medicines with no stock and no demand are counted "
-               "on the Data Quality page.")
-    st.dataframe(review[["Brand_Name", "Unit", "Dosage_Form", "ABC_Planning", "Planning_Stock", "Demand_Last_12_Months",
-                         "Months_Of_Cover", "Slow_Moving", "Excess_Stock", "Expired_Value_12m_Capped",
-                         "Expired_Value_Label", *(NEAR_COLUMNS if near == "available" else []), "Review_Reason"]]
-                 .sort_values("Brand_Name"), hide_index=True, width="stretch")
+    with card("waste"):
+        tiles("waste", [("Slow-moving", int(review.Slow_Moving.sum()), "expiry"),
+                        ("Excess stock", int(review.Excess_Stock.sum()), "expiry"),
+                        ("Near-expiry (180 days)", "not available" if near != "available" else "see table", "expiry")])
+        if near != "available":
+            st.warning(f"Near-expiry: {near}.")
+            missing = table("c1_dq_expiry_missing")
+            if len(missing):
+                st.caption("Expiry exports needed for near-expiry: " + ", ".join(missing.Expected_File) + ".")
+    with card("near-expiry"):
+        near_expiry_section()
+    with card("expired"):
+        st.subheader("Expired value by month (PHP; upper bound, unmatched lots excluded)")
+        timeline = table("c1_tab_expiry_timeline")
+        c1_ui.bar_chart(timeline.set_index("Month").Expired_Value_Capped)
+        st.caption("Expired value: the received quantity of each lot expiring in the month, capped at the medicine's "
+                   "stock at that month-end, x land cost. An upper bound: the exports do not record what was left of "
+                   "each lot. Lots not matched to a PHARMACY medicine are excluded (see Data Quality).")
+    with card("waste-review"):
+        st.caption("Review list: medicines with planning stock above 0. Medicines with no stock and no demand are "
+                   "counted on the Data Quality page.")
+        view = filter_bar(review, "waste-review", status="Review_Reason")
+        show_table(view[present(view, ["Brand_Name", "Unit", "Dosage_Form", "ABC_Planning", "Planning_Stock",
+                                       "Demand_Last_12_Months", "Months_Of_Cover", "Slow_Moving", "Excess_Stock",
+                                       "Expired_Value_12m_Capped", "Expired_Value_Label",
+                                       *(NEAR_COLUMNS if near == "available" else []), "Review_Reason"])]
+                   .sort_values("Brand_Name"))
 
 
 def near_expiry_section() -> None:
@@ -146,33 +280,92 @@ def near_expiry_section() -> None:
     if not len(near):
         return
     st.info(near.Label.iloc[0])
-    kpi_row([("Lots", int(near.Near_Expiry_Lots.sum())), ("Medicines", len(near)),
-             ("Value capped (PHP)", f"{near.Near_Expiry_Value_Capped.sum():,.0f}")])
+    tiles("near-expiry", [("Lots", int(near.Near_Expiry_Lots.sum()), "expiry"), ("Medicines", len(near), "medicine"),
+                          ("Value capped (PHP)", f"{near.Near_Expiry_Value_Capped.sum():,.0f}", "procurement")])
     check = table("c1_tab_near_expiry_check")
     if len(check):
         st.caption("The worked example against what the same exports show actually expired in the months of its window.")
-        st.dataframe(check[["Measure", "Lots", "Medicines", "Value_Capped_PHP"]], hide_index=True, width="stretch")
-    st.dataframe(near[["Brand_Name", "Unit", "Dosage_Form", "Near_Expiry_Lots", "First_Expiry", "Last_Expiry",
-                       "Stock_At_As_Of", "Near_Expiry_Quantity_Capped", "Near_Expiry_Value_Capped"]],
-                 hide_index=True, width="stretch")
+        show_table(check[["Measure", "Lots", "Medicines", "Value_Capped_PHP"]])
+    view = filter_bar(near, "near-expiry")
+    show_table(view[["Brand_Name", "Unit", "Dosage_Form", "Near_Expiry_Lots", "First_Expiry", "Last_Expiry",
+                     "Stock_At_As_Of", "Near_Expiry_Quantity_Capped", "Near_Expiry_Value_Capped"]])
 
 
-def forecast_reliability() -> None:
+# ------------------------------------------------------------------ Medicine Detail
+
+def medicine_detail() -> None:
+    forecast = table("c1_tab_forecast")
+    choices = forecast.sort_values("Brand_Name")
+    names = dict(zip(choices.Medicine_Key, choices.Brand_Name))
+    if not names:
+        return
+    key = c1_ui.picker("Medicine", list(names), key="detail_medicine", format_func=names.get)
+    name = names[key]
+    reorder = rows_for(table("c1_tab_reorder"), key, name)
+    abc = rows_for(table("c1_tab_abc_ved"), key, name)
+    own_forecast = forecast[forecast.Medicine_Key.eq(key)]
+    with card("detail-class", "ABC-VED Priority Monitoring"):
+        tiles("detail-class", [("ABC_Planning", first_value(abc, "ABC_Planning"), "validation"),
+                               ("VED", first_value(abc, "VED"), "governance"),
+                               ("Selected_Model", first_value(own_forecast, "Selected_Model"), "forecast"),
+                               ("Reliability", first_value(own_forecast, "Reliability"), "check")])
+        show_table(abc[present(abc, ABC_COLUMNS)])
+    with card("detail-forecast", "Forecast Reliability and Demand Trends"):
+        st.warning(SUDDEN_CHANGE_NOTE)
+        series = table("c1_tab_forecast_series")
+        own_series = series[series.Medicine_Key.eq(key)]
+        c1_ui.line_chart(own_series.pivot_table(index="Month", columns="Series", values="Value"))
+        show_table(own_forecast[present(own_forecast, FORECAST_COLUMNS)])
+        st.subheader("Pandemic period (2021-2023)")
+        st.caption(FLAGGED_CAPTION)
+        flagged = rows_for(table("c1_tab_covid_flagged_months"), key, name)
+        show_table(flagged[present(flagged, FLAGGED_COLUMNS)])
+    with card("detail-stock", "Stockout Risk and Reorder Review"):
+        as_of_line(reorder)
+        show_table(reorder[present(reorder, REORDER_COLUMNS)])
+    with card("detail-sensitivity", "Sensitivity and Planning Assumptions"):
+        sensitivity = rows_for(table("c1_tab_sensitivity"), key, name)
+        show_table(sensitivity[present(sensitivity, SENSITIVITY_COLUMNS)])
+        st.subheader("Sensitivity grid: lead time x service level x holding rate")
+        st.caption(GRID_CAPTION)
+        grid = rows_for(table("c1_tab_sensitivity_grid"), key, name)
+        show_table(grid[present(grid, GRID_COLUMNS)])
+
+
+# ------------------------------------------------------------------ Analysis and Evidence
+
+ANALYSIS_TABS = ["ABC-VED Priority Monitoring", "Forecast Reliability and Demand Trends", "Pandemic period (2021-2023)",
+                 "Data Quality", "Key Performance Indicators"]
+
+
+def analysis_evidence() -> None:
+    for tab, render in zip(st.tabs(ANALYSIS_TABS), (abc_ved, forecast_evidence, covid_period, data_quality, kpis)):
+        with tab, card(f"analysis-{render.__name__}"):
+            render()
+
+
+def abc_ved() -> None:
+    abc = table("c1_tab_abc_ved")
+    summary = table("c1_tab_abc_summary")
+    planning = abc.ABC_Planning.value_counts()
+    tiles("abc", [("Class A", int(planning.get("A", 0)), "validation"), ("Class B", int(planning.get("B", 0)), "validation"),
+                  ("Class C", int(planning.get("C", 0)), "validation"), ("VED", "pending pharmacist", "governance")])
+    st.info("VED classification is pending the chief pharmacist's validation. Until then this page shows ABC only; "
+            "the ABC-VED matrix and Categories I, II and III appear once VED is validated.")
+    st.subheader("Share of 2025 consumption value by class")
+    year = summary[summary.Period.eq("2025") & summary.ABC_Class.isin(["A", "B", "C"])]
+    c1_ui.bar_chart(year.set_index("ABC_Class").Value_Share)
+    view = filter_bar(abc, "abc")
+    show_table(view[present(view, ABC_COLUMNS)].sort_values("Brand_Name"))
+
+
+def forecast_evidence() -> None:
     st.warning(SUDDEN_CHANGE_NOTE)
     forecast = table("c1_tab_forecast")
     counts = forecast.Reliability.value_counts()
-    kpi_row([(label, int(n)) for label, n in counts.items()][:4])
-    choices = forecast.sort_values("Brand_Name")
-    picked = st.selectbox("Medicine", choices.Brand_Name.tolist(), key="forecast_medicine")
-    key = choices[choices.Brand_Name.eq(picked)].Medicine_Key.iloc[0] if len(choices) else None
-    series = table("c1_tab_forecast_series")
-    if key is not None:
-        chart = series[series.Medicine_Key.eq(key)].pivot_table(index="Month", columns="Series", values="Value")
-        st.line_chart(chart)
-    columns = [c for c in ["Brand_Name", "Dosage_Form", "ABC_Planning", "Selected_Model", "Volume_Class", "Test_MAE", "Test_RMSE",
-                           "Test_MAPE", "Test_MAPE_Excluded_Zero_Months", "Test_WAPE", "Test_MASE", "Reliability",
-                           "Prospective_2026_MAE", "Limited_Planning_Estimate"] if c in forecast]
-    st.dataframe(forecast[columns].sort_values("Brand_Name"), hide_index=True, width="stretch")
+    tiles("reliability", [(label, int(n), "check") for label, n in counts.items()][:4])
+    view = filter_bar(forecast, "forecast", status="Reliability")
+    show_table(view[present(view, FORECAST_COLUMNS)].sort_values("Brand_Name"))
     st.subheader("COVID outlier rule: three variants")
     st.caption("The primary variant applies the paper's rule: a month of 2022-2023 more than 100% above or 50% below "
                "the item's 12-month average is flagged and, in training only, replaced by that average. Two "
@@ -186,8 +379,7 @@ def forecast_reliability() -> None:
     if len(comparison):
         wide = comparison.pivot_table(index=["Measure_Group", "Measure"], columns="Variant", values="Value",
                                       aggfunc="first").reset_index()
-        st.dataframe(wide, hide_index=True, width="stretch")
-    covid_period()
+        show_table(wide)
 
 
 def covid_period() -> None:
@@ -196,88 +388,52 @@ def covid_period() -> None:
     flagged = table("c1_tab_covid_flagged_months")
     comparison = table("c1_tab_covid_period_comparison")
     stable = table("c1_tab_covid_stable")
-    kpi_row([("Pandemic-period months flagged", len(flagged)), ("Medicines with a flagged month",
-             int(flagged.Medicine_Key.nunique()) if len(flagged) else 0), ("Stable across periods", len(stable))])
-    st.caption("Pandemic period: a month of 2022-2023 flagged by the outlier rule (more than 100% above or 50% below "
-               "the item average), replaced by that average in training only and listed here for review.")
+    tiles("pandemic", [("Pandemic-period months flagged", len(flagged), "attention"),
+                       ("Medicines with a flagged month", int(flagged.Medicine_Key.nunique()) if len(flagged) else 0,
+                        "medicine"), ("Stable across periods", len(stable), "check")])
+    st.caption(FLAGGED_CAPTION)
     with st.expander(f"Flagged months for review (pandemic period 2021-2023): {len(flagged)}"):
-        st.dataframe(flagged[["Brand_Name", "Unit", "Month", "Net_Demand", "Item_Average", "Rule", "Period_Label"]],
-                     hide_index=True, width="stretch")
+        view = filter_bar(flagged, "flagged", status="Rule")
+        show_table(view[present(view, FLAGGED_COLUMNS)])
     st.caption("Pandemic (2021-2023) vs post-pandemic (2024-2025), net demand per medicine: mean monthly demand, "
                "coefficient of variation (CV), and the ratio of means (post-pandemic / pandemic).")
-    st.dataframe(comparison[["Brand_Name", "Unit", "Pandemic_Mean_Monthly_Demand", "Pandemic_CV",
-                             "Post_Pandemic_Mean_Monthly_Demand", "Post_Pandemic_CV", "Ratio_Of_Means", "CV_Change",
-                             "Stable_Across_Periods", "Period_Label"]], hide_index=True, width="stretch")
+    view = filter_bar(comparison, "pandemic-comparison", status="Stable_Across_Periods")
+    show_table(view[present(view, ["Brand_Name", "Unit", "Pandemic_Mean_Monthly_Demand", "Pandemic_CV",
+                                   "Post_Pandemic_Mean_Monthly_Demand", "Post_Pandemic_CV", "Ratio_Of_Means",
+                                   "CV_Change", "Stable_Across_Periods", "Period_Label"])])
     with st.expander(f"Stable across periods: {len(stable)} (ratio of means 0.8-1.25 and |CV change| <= 0.25; "
                      "a default pending the chief pharmacist)"):
-        st.dataframe(stable[["Brand_Name", "Unit", "Ratio_Of_Means", "CV_Change", "Period_Label",
-                             "Stable_Rule_Status"]], hide_index=True, width="stretch")
-
-
-def abc_ved() -> None:
-    abc = table("c1_tab_abc_ved")
-    summary = table("c1_tab_abc_summary")
-    planning = abc.ABC_Planning.value_counts()
-    kpi_row([("Class A", int(planning.get("A", 0))), ("Class B", int(planning.get("B", 0))),
-             ("Class C", int(planning.get("C", 0))), ("VED", "pending pharmacist")])
-    st.info("VED classification is pending the chief pharmacist's validation. Until then this page shows ABC only; "
-            "the ABC-VED matrix and Categories I, II and III appear once VED is validated.")
-    st.subheader("Share of 2025 consumption value by class")
-    year = summary[summary.Period.eq("2025") & summary.ABC_Class.isin(["A", "B", "C"])]
-    st.bar_chart(year.set_index("ABC_Class").Value_Share)
-    st.dataframe(abc[["Brand_Name", "Dosage_Form", "ABC_2021", "ABC_2022", "ABC_2023", "ABC_2024", "ABC_2025", "ABC_2021_2025",
-                      "ABC_Planning", "VED"]].sort_values("Brand_Name"),
-                 hide_index=True, width="stretch")
-
-
-def sensitivity_assumptions() -> None:
-    sensitivity = table("c1_tab_sensitivity")
-    assumptions = table("c1_tab_assumptions")
-    as_of_line(sensitivity)
-    names = sorted(sensitivity.Brand_Name.dropna().unique())
-    picked = st.selectbox("Medicine", names, key="sensitivity_medicine") if names else None
-    view = sensitivity[sensitivity.Brand_Name.eq(picked)] if picked else sensitivity.iloc[0:0]
-    if len(view):
-        kpi_row([("Baseline ROP", f"{view.Baseline_ROP.iloc[0]:,.1f}"), ("Baseline EOQ", f"{view.Baseline_EOQ.iloc[0]:,.1f}"),
-                 ("Baseline safety stock", f"{view.Baseline_Safety_Stock.iloc[0]:,.1f}")])
-        st.bar_chart(view.set_index("Scenario").Change_ROP)
-    st.dataframe(view[["Scenario_Type", "Scenario", "Baseline_Safety_Stock", "Adjusted_Safety_Stock", "Baseline_ROP",
-                       "Adjusted_ROP", "Change_ROP_Pct", "Baseline_EOQ", "Adjusted_EOQ", "Change_EOQ_Pct"]],
-                 hide_index=True, width="stretch")
-    st.subheader("Sensitivity grid: lead time x service level x holding rate")
-    st.caption("Every combination of lead time 3/7/14 days, service level 90/95/99% and holding-cost rate 15/20/25%; "
-               "the baseline is 7 days, 95% and 20%.")
-    grid = table("c1_tab_sensitivity_grid")
-    own = grid[grid.Brand_Name.eq(picked)] if picked else grid.iloc[0:0]
-    st.dataframe(own[["Lead_Time_Days", "Service_Level", "Holding_Rate", "Safety_Stock", "Reorder_Point", "EOQ"]],
-                 hide_index=True, width="stretch")
-    st.subheader("Planning assumptions")
-    st.dataframe(assumptions, hide_index=True, width="stretch")
+        view = filter_bar(stable, "stable", status="Stable_Rule_Status")
+        show_table(view[present(view, ["Brand_Name", "Unit", "Ratio_Of_Means", "CV_Change", "Period_Label",
+                                       "Stable_Rule_Status"])])
 
 
 def data_quality() -> None:
     dq = table("c1_dq_summary")
     as_of_line(dq)
     inactive = table("c1_dq_inactive")
-    kpi_row([("Inactive (no stock, no demand)", len(inactive)),
-             ("Negative stock records", int(dq.set_index("Check").Count.get("Negative stock records (month-ends)", 0)))])
-    st.dataframe(dq[["Check", "Count"]], hide_index=True, width="stretch")
+    tiles("data-quality", [("Inactive (no stock, no demand)", len(inactive), "check"),
+                           ("Negative stock records",
+                            int(dq.set_index("Check").Count.get("Negative stock records (month-ends)", 0)), "attention")])
+    show_table(dq[["Check", "Count"]])
     with st.expander(f"Inactive medicines (no stock, no demand): {len(inactive)}"):
-        st.dataframe(inactive[["Brand_Name", "Generic_Name", "Unit"]], hide_index=True, width="stretch")
+        view = filter_bar(inactive, "inactive", status="Status")
+        show_table(view[present(view, ["Brand_Name", "Generic_Name", "Unit"])])
     with st.expander("Negative stock records"):
-        st.dataframe(table("c1_dq_negative_stock"), hide_index=True, width="stretch")
+        negative = table("c1_dq_negative_stock")
+        show_table(filter_bar(negative, "negative-stock"))
     st.subheader("Expiry lots not matched to a PHARMACY medicine")
-    st.dataframe(table("c1_dq_expiry_unmatched_groups"), hide_index=True, width="stretch")
+    show_table(table("c1_dq_expiry_unmatched_groups"))
     with st.expander("Unmatched expiry items"):
-        st.dataframe(table("c1_dq_expiry_unmatched"), hide_index=True, width="stretch")
+        show_table(table("c1_dq_expiry_unmatched"))
     st.subheader("Expiry exports on disk")
     st.caption("Each export lists the receipt lots expiring in one month (its printed expiration-date range); the "
                "exports carry no run date.")
-    st.dataframe(table("c1_dq_expiry_exports"), hide_index=True, width="stretch")
+    show_table(table("c1_dq_expiry_exports"))
     missing = table("c1_dq_expiry_missing")
     if len(missing):
         st.warning(f"{len(missing)} expiry exports are needed for near-expiry and are not on disk.")
-        st.dataframe(missing, hide_index=True, width="stretch")
+        show_table(missing)
 
 
 def kpis() -> None:
@@ -285,37 +441,43 @@ def kpis() -> None:
     table_kpi = table("c1_tab_kpi")
     as_of_line(table_kpi)
     counts = table_kpi.Status.value_counts()
-    kpi_row([("Met", int(counts.get("met", 0))), ("Pending", int(counts.get("pending", 0))),
-             ("Not met", int(counts.get("not met", 0)))])
+    tiles("kpi", [("Met", int(counts.get("met", 0)), "check"), ("Pending", int(counts.get("pending", 0)), "info"),
+                  ("Not met", int(counts.get("not met", 0)), "attention")])
     st.caption("The KPIs measure whether the planning outputs are generated and interpretable; they do not claim "
                "operational improvement. Pending: the output exists but waits for a confirmation the target names.")
-    st.dataframe(table_kpi[["KPI", "Target", "Evidence", "Status", "Note"]], hide_index=True, width="stretch")
+    show_table(table_kpi[["KPI", "Target", "Evidence", "Status", "Note"]])
 
 
-# The order of Table 3.8.1.1, then the data-quality and KPI pages: (title, URL path, render function).
+# ------------------------------------------------------------------ Pages and navigation
+
+# (title, URL path, render function, sidebar icon)
 PLANNING_PAGES = [
-    ("Stock Health Overview", "stock-health", stock_health),
-    ("Stockout Risk and Reorder Review", "stockout-reorder", stockout_reorder),
-    ("Waste and Expiry Risk", "waste-expiry", waste_expiry),
-    ("Forecast Reliability and Demand Trends", "forecast-reliability", forecast_reliability),
-    ("ABC-VED Priority Monitoring", "abc-ved", abc_ved),
-    ("Sensitivity and Planning Assumptions", "sensitivity", sensitivity_assumptions),
-    ("Data Quality", "data-quality", data_quality),
-    ("Key Performance Indicators", "kpis", kpis),
+    ("Overview", "overview", overview, "overview"),
+    ("Reorder Planning", "reorder-planning", reorder_planning, "cart"),
+    ("Waste and Expiry", "waste-and-expiry", waste_expiry, "calendar"),
+    ("Medicine Detail", "medicine-detail", medicine_detail, "medicine"),
+    ("Analysis and Evidence", "analysis-and-evidence", analysis_evidence, "shield"),
 ]
+
+
+def stock_as_of() -> str | None:
+    reorder = table("c1_tab_reorder")
+    return f"Stock as of {reorder.As_Of_Month.iloc[0]}" if "As_Of_Month" in reorder and len(reorder) else None
 
 
 def planning_page(title: str, render: Callable[[], None]) -> Callable[[], None]:
     def page() -> None:
-        st.title(title)
+        c1_ui.page_header(PLANNING_SECTION, title)
         if DEMO:
             st.warning(DEMO_NOTE)
         if not DATABASE.exists():
             st.error(f"The planning data mart was not found at {DATABASE}. Run the Capstone 1 build first.")
             st.stop()
+        c1_ui.topbar(title, stock_as_of())
         st.info(PROXY_NOTE)
         st.caption(DECISION_NOTE)
         render()
+        c1_ui.footer()
     return page
 
 
@@ -344,20 +506,38 @@ def supplementary_page(name: str) -> Callable[[], None]:
 
 
 def url_path(name: str) -> str:
-    return "supplementary-" + name.lower().replace("&", "and").replace(" ", "-")
+    return "supplementary-" + c1_ui.slug(name)
+
+
+def sidebar(current: st.Page) -> None:
+    """The page buttons: the five planning pages, then the earlier pages as one collapsed group at the bottom."""
+    planning_keys = {title: f"sidebar-nav-{c1_ui.slug(title)}" for title, *_ in PLANNING_PAGES}
+    earlier_keys = {name: f"sidebar-nav-earlier-{c1_ui.slug(name)}" for name in SUPPLEMENTARY}
+    icons = {planning_keys[title]: icon for title, _, _, icon in PLANNING_PAGES} | dict.fromkeys(earlier_keys.values(),
+                                                                                                "book")
+    with st.sidebar:
+        c1_ui.install_styles(icons)
+        c1_ui.sidebar_brand()
+        c1_ui.nav_group(PLANNING_SECTION)
+        for title, page in PAGES.items():
+            if c1_ui.nav_button(title, planning_keys[title], page.url_path == current.url_path):
+                st.switch_page(page)
+        if SUPPLEMENTARY:
+            opened = current.url_path in {page.url_path for page in SUPPLEMENTARY.values()}
+            with st.expander(EARLIER_GROUP, expanded=opened):
+                for name, page in SUPPLEMENTARY.items():
+                    if c1_ui.nav_button(EARLIER_LABELS.get(name, name), earlier_keys[name],
+                                        page.url_path == current.url_path):
+                        st.switch_page(page)
 
 
 st.set_page_config(page_title="Inpatient Pharmacy Planning", layout="wide", initial_sidebar_state="expanded")
-PLANNING = [st.Page(planning_page(title, render), title=title, url_path=path, default=(n == 0))
-            for n, (title, path, render) in enumerate(PLANNING_PAGES)]
-# The supplementary pages are built only when shown: in DEMO mode app/main.py (and the modules it imports) is never
-# read, so a demo image can leave them out.
+PAGES = {title: st.Page(planning_page(title, render), title=title, url_path=path, default=(n == 0))
+         for n, (title, path, render, _) in enumerate(PLANNING_PAGES)}
+# The earlier pages are built only when shown: in DEMO mode app/main.py (and the modules it imports) is never read, so
+# a demo deployment can leave them out.
 SUPPLEMENTARY = {name: st.Page(supplementary_page(name), title=name, url_path=url_path(name))
                  for name in existing_pages()} if SHOW_SUPPLEMENTARY else {}
-sections = {PLANNING_SECTION: PLANNING}
-if SHOW_SUPPLEMENTARY:
-    sections[SUPPLEMENTARY_SECTION] = list(SUPPLEMENTARY.values())
-current = st.navigation(sections)
-if current.url_path in {page.url_path for page in PLANNING} and DATABASE.exists():
-    form_filter()  # drawn here, outside the pages, so the choice survives a change of planning page
+current = st.navigation(list(PAGES.values()) + list(SUPPLEMENTARY.values()), position="hidden")
+sidebar(current)
 current.run()
