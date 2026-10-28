@@ -119,6 +119,34 @@ html, body, .stApp, [data-testid="stApp"], [data-testid="stAppViewContainer"], [
 """
 
 
+# The earlier app (app/main.py) is a light design and hides Streamlit's menu, where a theme is chosen. Since
+# .streamlit/config.toml defines a light and a dark theme (for app/capstone1_app.py), an operating system in dark mode
+# would turn its widgets and tables dark under its light styles; this stores the light choice, as the settings menu
+# does, and reloads once. A session flag keeps it from ever reloading twice.
+_KEEP_LIGHT_JS = """
+export default function () {
+  try {
+    if (window.sessionStorage.getItem('cdh-keep-light')) return;
+    window.sessionStorage.setItem('cdh-keep-light', '1');
+    const key = `stActiveTheme-${window.location.pathname}-v2`;
+    window.localStorage.setItem(key, JSON.stringify('Light'));
+    if (window.localStorage.getItem(key) === JSON.stringify('Light')) window.location.reload();
+  } catch (e) {}
+}
+"""
+
+
+def keep_light_mode() -> None:
+    """Keep the earlier app light when the browser reports dark mode (see _KEEP_LIGHT_JS)."""
+    try:
+        dark = st.context.theme.type == "dark"
+    except Exception:  # noqa: BLE001 - no browser context (tests)
+        dark = False
+    if dark:
+        from streamlit.components.v2 import component
+        component("cdh_keep_light", js=_KEEP_LIGHT_JS)(key="cdh-keep-light", data={})
+
+
 def install_theme_css() -> None:
     """Inject the safety-net CSS. Safe to call once per run, after the page CSS."""
     st.html("<style>" + THEME_CSS + "</style>")
