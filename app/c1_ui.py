@@ -292,9 +292,13 @@ def bar_chart(data: pd.Series, horizontal: bool = False, value_title: str | None
     color = c1_theme.token("teal", c1_theme.mode())
     sort = order if order is not None else None
     if horizontal:
+        # room past the longest bar for its value label, on each side that has bars
+        low, high = min(0.0, float(frame.Value.min())), max(0.0, float(frame.Value.max()))
+        room = (high - low) * 0.1 or 1.0
+        domain = [low - room if low < 0 else 0.0, high + room if high > 0 else (0.0 if low < 0 else room)]
         chart = alt.Chart(frame).mark_bar(color=color).encode(
             y=alt.Y(f"{category}:N", sort=sort, axis=_axis(None, limit=0)),
-            x=alt.X("Value:Q", axis=_axis(value_title, label_format=axis_format)),
+            x=alt.X("Value:Q", axis=_axis(value_title, label_format=axis_format), scale=alt.Scale(domain=domain)),
             tooltip=[category, alt.Tooltip("Value:Q", format=value_format)])
         # each value just past the end of its bar, outside it: right of a positive bar, left of a negative one
         ink = c1_theme.token("ink", c1_theme.mode())

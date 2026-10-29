@@ -100,8 +100,6 @@ VIEWS = {"Reorder now": ("reorder-now", "Below safety stock or at or below ROP: 
          "Do not reorder": ("unused", "No consumption in 2025 with stock held, or excess stock (above ROP + EOQ)."),
          "Check the stock record": ("stock-record", "A negative stock record: no stock-based result until it is "
                                                     "checked.")}
-# The list and sort widgets a "Show me" presets; a sidebar page button clears them, so the page opens on its default.
-LIST_PRESETS = ("view", "all", "sort")
 # Waste and Expiry: the lot order (?sort=Soonest+expiry).
 SORTS = {"Soonest expiry": (["Expiration_Date", "Near_Expiry_Capped_Value"], [True, False]),
          "Highest value": (["Near_Expiry_Capped_Value", "Expiration_Date"], [False, True])}
@@ -181,6 +179,25 @@ def selections(reorder: pd.DataFrame) -> dict[str, pd.Series]:
     excess = unused & reorder.get("Excess_Stock", pd.Series(False, index=reorder.index)).fillna(False).astype(bool)
     return {"reorder-now": status.isin(REVIEW_STATUSES), "critical": (category_one | vital) & status.eq(BELOW_SS),
             "no-use": no_use, "excess": excess, "unused": unused, "stock-record": status.eq(NEGATIVE)}
+
+
+def seed(key: str, options: list, parse=lambda text: text) -> None:
+    """A bookmarked view: the URL's value (?view=Could+run+out) presets its widget once; an unknown value is ignored.
+    The widgets are not bound to the URL (st.switch_page cannot clear a bound parameter): seed and keep_in_url do it."""
+    if key in st.session_state or key not in st.query_params:
+        return
+    value = parse(st.query_params[key])
+    if value in options:
+        st.session_state[key] = value
+
+
+def keep_in_url(key: str, value: object, default: object, text=str) -> None:
+    """The widget's value in the URL, so the view can be bookmarked; the default stays out of it."""
+    if value is None or value == default:
+        if key in st.query_params:
+            del st.query_params[key]
+    elif st.query_params.get(key) != text(value):
+        st.query_params[key] = text(value)
 
 
 def open_medicine(key: object) -> None:
@@ -371,8 +388,12 @@ def reorder_planning() -> None:
                           (c1_format.CHECK_RECORD, int(reorder.Reorder_Status.eq(NEGATIVE).sum()), "attention")])
         action_chart(reorder)
         left, right = st.columns([3, 1], vertical_alignment="bottom")
-        view_label = left.selectbox("List", list(VIEWS), key="view", bind="query-params")
-        show_all = right.toggle(f"Show all {len(reorder):,}", key="all", bind="query-params")
+        seed("view", list(VIEWS))
+        seed("all", [True], parse=lambda text: text.lower() == "true")
+        view_label = left.selectbox("List", list(VIEWS), key="view")
+        show_all = right.toggle(f"Show all {len(reorder):,}", key="all")
+        keep_in_url("view", view_label, next(iter(VIEWS)))
+        keep_in_url("all", show_all, False, text=lambda value: "true")
         view_name, view_note = VIEWS[view_label]
         st.caption(f"All {len(reorder):,} planned medicines, by name." if show_all else view_note)
         listed = reorder if show_all else reorder[chosen[view_name]]
@@ -397,7 +418,9 @@ def what_if(reorder: pd.DataFrame) -> None:
     if names and st.session_state.get("wi_medicine") not in names:
         ranked = priority(reorder[reorder.Brand_Name.isin(names)])
         st.session_state["wi_medicine"] = ranked.Brand_Name.iloc[0] if len(ranked) else names[0]
-    picked = c1_ui.picker("Medicine", names, key="wi_medicine", bind="query-params") if names else None
+    picked = c1_ui.picker("Medicine", names, key="wi_medicine") if names else None
+    if picked is not None and st.query_params.get("whatif") == "1":
+        keep_in_url("wi_medicine", picked, None)
     view = sensitivity[sensitivity.Brand_Name.eq(picked)] if picked else sensitivity.iloc[0:0]
     own = grid[grid.Brand_Name.eq(picked)] if picked else grid.iloc[0:0]
     inputs = planning_inputs(assumptions)
@@ -579,8 +602,10 @@ def near_expiry_section() -> None:
         c1_ui.show_table(check[["Measure", "Lots", "Medicines", "Value_Capped_PHP"]], row_height=TABLE_ROW_WRAP)
     lots = near_lots()
     if len(lots):
-        order = st.selectbox("Sort lots by", list(SORTS), key="sort", bind="query-params",
+        seed("sort", list(SORTS))
+        order = st.selectbox("Sort lots by", list(SORTS), key="sort",
                              help="Soonest expiry: then the highest value first. Highest value: then the soonest.")
+        keep_in_url("sort", order, next(iter(SORTS)))
         keys, ascending = SORTS[order]
         lots = lots.sort_values([*keys, "Brand_Name"], ascending=[*ascending, True]).assign(Suggested_Action="Use first")
         left = lots.Near_Expiry_Capped_Quantity.fillna(0).gt(0)
@@ -619,7 +644,8 @@ def medicine_detail() -> None:
     options = [k for k, n in names.items() if not search or search.lower() in str(n).lower()] or list(names)
     if st.session_state["medicine"] not in options:
         options = [st.session_state["medicine"], *options]
-    key = c1_ui.picker("Medicine", options, key="medicine", format_func=names.get, bind="query-params")
+    key = c1_ui.picker("Medicine", options, key="medicine", format_func=names.get)
+    keep_in_url("medicine", names[key], None)
     name = names[key]
     reorder = rows_for(reorder_list(), key, name)
     abc = rows_for(table("c1_tab_abc_ved"), key, name)
@@ -877,8 +903,8 @@ def sidebar(current: st.Page) -> None:
             if title == EVIDENCE:
                 c1_ui.nav_group(PANEL_GROUP, small=True)
             if c1_ui.nav_button(title, keys[title], page.url_path == current.url_path):
-                for name in LIST_PRESETS:            # a page button opens the page's default list; "Show me" and
-                    st.session_state.pop(name, None)  # bookmarks set theirs
+                # a page button opens the page's default list ("Show me" and bookmarks set theirs)
+                st.session_state.update(view=next(iter(VIEWS)), all=False, sort=next(iter(SORTS)))
                 st.switch_page(page)
 
 
