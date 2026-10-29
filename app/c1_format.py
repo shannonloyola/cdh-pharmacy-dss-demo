@@ -37,6 +37,8 @@ LABELS = {
     "Reorder_Status": "Status", "Stock_Status": "Stock record", "Planning_Stock": "Stock on hand",
     "Reorder_Point": "Reorder point", "Safety_Stock": "Safety stock", "EOQ": "EOQ", "Suggested_Order": "Suggested order",
     "Order_Multiple": "EOQ batches (n)", "Months_Of_Cover_With_Order": "Months of cover",
+    "Order_Basis": "Order basis", "Shelf_Life_Months": "Shelf life (months)", "Shelf_Life_Lots": "Lots with a shelf life",
+    "Shelf_Life_Cap": "Shelf-life cap", "Free_Goods": "Received as free goods",
     "Baseline_Suggested_Order": "Baseline suggested order", "Adjusted_Suggested_Order": "Adjusted suggested order",
     "Service_Level": "Service level", "Selected_Model": "Forecast model", "Reliability": "Reliability",
     "Test_MAE": "Test MAE", "Test_RMSE": "Test RMSE", "Test_MAPE": "Test MAPE",
@@ -89,8 +91,9 @@ WHOLE = {"Planning_Stock", "Reorder_Point", "Safety_Stock", "EOQ", "Baseline_Saf
          "Baseline_ROP", "Adjusted_ROP", "Change_ROP", "Baseline_EOQ", "Adjusted_EOQ", "Stock_At_As_Of",
          "Near_Expiry_Quantity_Capped", "Near_Expiry_Capped_Quantity", "Quantity", "Ending_Balance", "Lots",
          "Near_Expiry_Lots", "Medicines", "Count", "Items", "Lead_Time_Days", "Latest_Annual_Issuance",
-         "Suggested_Order", "Baseline_Suggested_Order", "Adjusted_Suggested_Order", "Order_Multiple"}
-ONE_DECIMAL = {"Months_Of_Cover_With_Order"}
+         "Suggested_Order", "Baseline_Suggested_Order", "Adjusted_Suggested_Order", "Order_Multiple",
+         "Shelf_Life_Lots", "Shelf_Life_Cap"}
+ONE_DECIMAL = {"Months_Of_Cover_With_Order", "Shelf_Life_Months"}
 PESOS = {"Near_Expiry_Value_Capped", "Expired_Value_12m_Capped", "Expired_Value_Capped", "Value_Capped_PHP",
          "Near_Expiry_Capped_Value", "Unit_Cost", "Ordering_Cost", "Stock_Value", "Consumption_Value", "Average_Cost",
          "Lot_Value", "Order_Value", "Known_ACV", "Latest_ACV"}
@@ -137,6 +140,22 @@ def input_label(name: object) -> object:
         if text.startswith(prefix + "_"):
             return f"Sensitivity grid: {words_} ({text.rsplit('_', 1)[-1]} of 3)"
     return name
+
+
+# Config names inside a planning input's source text, in words.
+SOURCE_WORDS = {"the ordering_cost_part rows below": "the ordering-cost parts below"}
+
+
+def plain_source(text: object) -> object:
+    """A planning input's source without config names ("the ordering_cost_part rows below" -> "the ordering-cost
+    parts below"; any other input name -> its label)."""
+    if not isinstance(text, str):
+        return text
+    for code, words_ in SOURCE_WORDS.items():
+        text = text.replace(code, words_)
+    for code, words_ in INPUT_LABELS.items():
+        text = text.replace(code, words_.lower())
+    return text
 
 
 def label(column: str) -> str:
@@ -291,14 +310,21 @@ def display(frame: pd.DataFrame):
 
 DO_NOT_REORDER, NO_DEMAND_ACTION, NO_ORDER, CHECK_RECORD = ("Do not reorder", "No demand expected", "No order needed",
                                                           "Check the stock record")
+FREE_GOODS_ACTION = "Check supply source (received as free goods)"
+CAP_BELOW_ROP = "cap (below ROP need)"            # build_planning.BASIS_CAP_BELOW
+CAP_BELOW_ROP_REVIEW = "review: reorder point is more than it can use before expiry"
 
 
 def suggested_action(status: object, abc: object = None, quantity: object = None, stock: object = None,
-                     excess: object = None) -> str:
+                     excess: object = None, free_goods: object = None, basis: object = None) -> str:
     """The plain action of a medicine, restated from its existing reorder status, ABC class, suggested order (n x EOQ,
     the (s, nQ) policy of the planning step), stock and excess-stock flag; the first that applies:
     no plan row (not forecast) -> "Not planned (no forecast)"; below safety stock -> "Order urgently <suggested order>";
-    at or below ROP -> "Order <suggested order>"; a negative stock record -> "Check the stock record"; no 2025
+    at or below ROP -> "Order <suggested order>", except that a medicine whose receipt lots all came at land cost 0
+    reads "Check supply source (received as free goods)" instead of a quantity, and an order capped below what lifts
+    stock above the ROP reads "Order <cap> – review: reorder point is more than it can use before expiry"; a negative
+    stock record -> "Check the
+    stock record"; no 2025
     consumption with stock held, or
     excess stock (above ROP + EOQ) -> "Do not reorder"; no demand expected (ROP 0 or a next-month forecast below 0.5
     units) -> "No demand expected"; above ROP -> "No order needed".
@@ -306,6 +332,10 @@ def suggested_action(status: object, abc: object = None, quantity: object = None
     if _missing(status):
         return "Not planned (no forecast)"
     amount = "" if _missing(quantity) else f" {float(quantity):,.0f}"
+    if status in REVIEW_STATUSES and not _missing(free_goods) and bool(free_goods):
+        return FREE_GOODS_ACTION
+    if status in REVIEW_STATUSES and basis == CAP_BELOW_ROP and amount:
+        return f"Order{amount} – {CAP_BELOW_ROP_REVIEW}"
     if status == BELOW_SS:
         return f"Order urgently{amount}" if amount else "Order urgently (order quantity not available)"
     if status == AT_ROP:
@@ -329,17 +359,20 @@ def with_action(frame: pd.DataFrame, reorder: pd.DataFrame | None = None) -> pd.
         return frame
     source = frame
     on = next((c for c in ("Medicine_Key", "Brand_Name") if reorder is not None and c in frame and c in reorder), None)
-    extra = [c for c in ("Reorder_Status", "Suggested_Order", "Planning_Stock", "Excess_Stock")
+    extra = [c for c in ("Reorder_Status", "Suggested_Order", "Planning_Stock", "Excess_Stock", "Free_Goods",
+                         "Order_Basis")
              if on and c not in frame and c in reorder]
     if extra:
         lookup = reorder.drop_duplicates(on).set_index(on)[extra]
         source = frame.join(lookup, on=on)
-    actions = [suggested_action(s, a, q, h, x) for s, a, q, h, x in zip(
+    actions = [suggested_action(s, a, q, h, x, f, b) for s, a, q, h, x, f, b in zip(
         source.get("Reorder_Status", pd.Series(index=source.index, dtype=object)),
         source.get("ABC_Planning", pd.Series(index=source.index, dtype=object)),
         source.get("Suggested_Order", pd.Series(index=source.index, dtype=float)),
         source.get("Planning_Stock", pd.Series(index=source.index, dtype=float)),
-        source.get("Excess_Stock", pd.Series(index=source.index, dtype=object)))]
+        source.get("Excess_Stock", pd.Series(index=source.index, dtype=object)),
+        source.get("Free_Goods", pd.Series(index=source.index, dtype=object)),
+        source.get("Order_Basis", pd.Series(index=source.index, dtype=object)))]
     out = frame.copy()
     out.insert(1 if len(out.columns) else 0, "Suggested_Action", actions)
     return out

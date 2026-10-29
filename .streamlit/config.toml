@@ -1,6 +1,7 @@
 # Light and dark themes for Streamlit's own widgets, tables and charts. Light: the colours of the existing app CSS
 # (teal #1f6f78, canvas #f3f7f8, sidebar #eff4f5, ink #14264a, line #e3e8eb). Dark: the same colours through
-# app/c1_theme.dark() (hue kept, lightness mirrored), the mapping the app applies to its stylesheets in dark mode.
+# app/c1_theme.dark() (hue kept, lightness mirrored; the navy ink turns near-white), the mapping the app applies to its
+# stylesheets in dark mode.
 # The mode follows the browser: the settings menu, the operating system or the app's top-bar toggle.
 
 [theme.light]
@@ -21,7 +22,7 @@ secondaryBackgroundColor = "#ffffff"
 primaryColor = "#7bd3dd"
 backgroundColor = "#1c282c"
 secondaryBackgroundColor = "#1f2b2e"
-textColor = "#a0b7e5"
+textColor = "#e9eaec"
 linkColor = "#7bd3dd"
 borderColor = "#293136"
 dataframeBorderColor = "#293136"

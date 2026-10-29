@@ -54,10 +54,18 @@ ASSUMPTION_LINE = ("Planning estimates use assumptions set by the project team (
                    "The DSS suggests; the pharmacist decides.")
 ORDER_RULE_NOTE = ("Suggested order: when a medicine's stock on hand is at or below its reorder point, n x EOQ, with n the "
                    "smallest whole number that brings stock on hand plus the order above the reorder point (the (s, nQ) "
-                   "policy; Axsäter, Inventory Control, 3rd ed., 2015). Stock on hand stands in for the inventory "
-                   "position (stock on hand plus stock on order): the PHARMACY exports record no quantity on order. EOQ, "
-                   "the reorder point and safety stock are not changed by it. Months of cover: (stock on hand + suggested "
-                   "order) / the planning month's forecast, blank when nothing is forecast.")
+                   "policy; Axsäter, Inventory Control, 3rd ed., 2015), capped at what the medicine can use before it "
+                   "expires: the planning month's forecast x its shelf life, rounded down (Silver, Pyke and Thomas, "
+                   "2017). The shelf life is the median time from receipt to expiry of the medicine's own receipt lots "
+                   "in the expiry exports (lots expiring on or before receipt left out); without such lots there is no "
+                   "cap. When even the cap does not lift stock above the reorder point, the order is still the cap, "
+                   "marked for review: the reorder point is more than the medicine can use before it expires. Stock on "
+                   "hand stands in for the inventory position (stock on hand plus stock on order): "
+                   "the PHARMACY exports record no quantity on order. EOQ, the reorder point and safety stock are not "
+                   "changed by it. A medicine whose receipt lots all came at land cost 0 reads \"Check supply source "
+                   "(received as free goods)\" instead of a quantity and is left out of the order card's pesos. Months "
+                   "of cover: (stock on hand + suggested order) / the planning month's forecast, blank when nothing is "
+                   "forecast.")
 PROXY_NOTE = ("Planning estimates. Lead time (not recorded in CDH data), ordering cost, holding-cost rate and the "
               "service level of each VED class are proponent decisions and assumptions (P); VED classes are the "
               "proponents' assignment by documented clinical criteria, delegated by the chief pharmacist.")
@@ -68,8 +76,8 @@ SUDDEN_CHANGE_NOTE = ("Forecasts follow the patterns in the 2021-2025 records (a
 NEAR_COLUMNS = ["Near_Expiry_Lots", "Near_Expiry_Quantity_Capped", "Near_Expiry_Value_Capped"]
 # Reorder Planning: the decision columns first; the CSV keeps every column.
 REORDER_COLUMNS = ["Brand_Name", "Suggested_Action", "Reorder_Status", "Planning_Stock", "Reorder_Point",
-                   "Suggested_Order", "ABC_VED_Category", "Reliability", "Months_Of_Cover_With_Order", "EOQ",
-                   "Order_Multiple", "Unit", "Dosage_Form", "ABC_Planning", "VED", "Service_Level", "Safety_Stock",
+                   "Suggested_Order", "ABC_VED_Category", "Reliability", "Months_Of_Cover_With_Order",
+                   "Shelf_Life_Months", "Order_Basis", "EOQ", "Order_Multiple", "Unit", "Dosage_Form", "ABC_Planning", "VED", "Service_Level", "Safety_Stock",
                    "Forecast_Planning_Month", "Stock_Status", "Planning_Label"]
 # The first eight columns fit the page at 1366px with the sidebar open (an 890px table): each at least its header's
 # width, the long text wrapping in taller rows (pixels).
@@ -91,6 +99,7 @@ LOT_COLUMNS = ["Brand_Name", "Suggested_Action", "Expiration_Date", "Lot_No", "N
                "Near_Expiry_Capped_Value", "Unit", "Dosage_Form"]
 FLAGGED_CAPTION = ("Pandemic period: a month of 2022-2023 flagged by the outlier rule (more than 100% above or 50% below "
                    "the item average), replaced by that average in training only and listed here for review.")
+PANDEMIC_HEADING = "Pandemic period (2021–2023; outlier rule tested on 2022–2023)"
 GRID_HEADING = "Sensitivity grid: lead time x service level x holding rate x ordering cost"
 GRID_CAPTION = ("Every combination of lead time 3/7/14 days, service level 90/95/99%, holding-cost rate 20/30/40% and "
                 "ordering cost PHP 250/500/1,000; the baseline is 7 days, the service level of the medicine's VED class "
@@ -265,9 +274,11 @@ def decisions() -> None:
         st.caption(updated)
     chosen = selections(reorder)
     now = reorder[chosen["reorder-now"]]
-    cost = now.Suggested_Order * now.Unit_Cost if {"Suggested_Order", "Unit_Cost"} <= set(now) \
+    free = now.get("Free_Goods", pd.Series(False, index=now.index)).fillna(False).astype(bool)
+    cost = (now.Suggested_Order * now.Unit_Cost)[~free] if {"Suggested_Order", "Unit_Cost"} <= set(now) \
         else pd.Series(dtype=float)
     order_value, priced = cost.sum(min_count=1) if len(cost) else float("nan"), int(cost.notna().sum())
+    free_note = f"; {int(free.sum()):,} received as free goods, not priced" if free.any() else ""
     vital_now = int(now.VED.eq("V").sum()) if "VED" in now else 0
     critical = reorder[chosen["critical"]]
     no_use, excess = int(chosen["no-use"].sum()), int(chosen["excess"].sum())
@@ -283,7 +294,7 @@ def decisions() -> None:
         if c1_ui.question_card("order", "What do I order now, and how much?", f"{len(now):,} medicines",
                                f"<strong>{vital_now:,}</strong> Vital. Suggested orders "
                                f"<strong>{c1_format.pesos(order_value)}</strong> (suggested order x unit cost, "
-                               f"{priced:,} priced)."):
+                               f"{priced:,} priced{free_note})."):
             go(REORDER, {"view": "Reorder now", "all": False}, {"view": "Reorder now"})
     with second:
         if c1_ui.question_card("run-out", "Which critical medicines could run out?", f"{len(critical):,} medicines",
@@ -715,7 +726,7 @@ def medicine_detail() -> None:
         own_series = series[series.Medicine_Key.eq(key)]
         c1_ui.line_chart(own_series.pivot_table(index="Month", columns="Series", values="Value"), y_title="Units")
         c1_ui.show_table(own_forecast[present(own_forecast, [c for c in FORECAST_COLUMNS if c != "Suggested_Action"])])
-        st.subheader("Pandemic period (2021-2023)")
+        st.subheader(PANDEMIC_HEADING)
         st.caption(FLAGGED_CAPTION)
         flagged = rows_for(table("c1_tab_covid_flagged_months"), key, name)
         if len(flagged):
@@ -723,6 +734,11 @@ def medicine_detail() -> None:
         else:
             st.markdown("No flagged months for this medicine.")
     with card("detail-stock", "Stock and reorder"):
+        months = reorder.Shelf_Life_Months.iloc[0] if "Shelf_Life_Months" in reorder and len(reorder) else None
+        lots = reorder.Shelf_Life_Lots.iloc[0] if "Shelf_Life_Lots" in reorder and len(reorder) else 0
+        tiles("detail-shelf", [("Shelf life", f"{months:,.1f} months" if pd.notna(months) else "not recorded",
+                                "expiry", f"median of {lots:,.0f} receipt lots" if pd.notna(months)
+                                else "no receipt lot with an expiry after its receipt date")])
         c1_ui.show_table(reorder[present(reorder, REORDER_COLUMNS)])
     with card("detail-sensitivity", "What if"):
         planned = name in set(table("c1_tab_sensitivity").Brand_Name.dropna())
@@ -802,14 +818,14 @@ def forecast_evidence() -> None:
     if len(comparison):
         wide = comparison.pivot_table(index=["Measure_Group", "Measure"], columns="Variant", values="Value",
                                       aggfunc="first").reset_index()
-        c1_ui.show_table(wide, widths={"Measure_Group": 270, "Measure": 210})
+        c1_ui.static_table(wide)                # every variant column in view: the headers wrap
     annual("forecast_section")
 
 
 def covid_period() -> None:
     """Limitation 8: the pandemic-period outputs, each labelled as such. The outlier rule tests 2022-2023 only: a month
     is tested once 12 months of history precede it."""
-    st.subheader("Pandemic period (2021–2023; outlier rule tested on 2022–2023)")
+    st.subheader(PANDEMIC_HEADING)
     st.caption("2021 is not tested because the rule needs 12 months of history.")
     flagged = table("c1_tab_covid_flagged_months")
     comparison = c1_format.with_action(table("c1_tab_covid_period_comparison"), table("c1_tab_reorder"))
@@ -900,8 +916,9 @@ def how_numbers_are_made() -> None:
         assumptions = table("c1_tab_assumptions")
         if len(assumptions):
             st.markdown("**Planning assumptions**")
-            named = assumptions.assign(Input=assumptions.Input.map(c1_format.input_label)) \
-                if "Input" in assumptions else assumptions
+            named = assumptions.assign(**{c: assumptions[c].map(f) for c, f in
+                                          (("Input", c1_format.input_label), ("Source", c1_format.plain_source))
+                                          if c in assumptions})
             c1_ui.static_table(named)
 
 
