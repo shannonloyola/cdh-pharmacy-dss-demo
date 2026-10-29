@@ -33,9 +33,11 @@ STATUS_ORDER = list(STATUS_TERMS.values())
 # Column labels. Columns not listed get their name with spaces and sentence case.
 LABELS = {
     "Brand_Name": "Medicine", "Generic_Name": "Generic name", "Unit": "Unit", "Dosage_Form": "Dosage form",
-    "ABC_Planning": "ABC class", "VED": "VED", "VED_Category": "VED category", "ABC_VED_Category": "ABC-VED category",
+    "ABC_Planning": "ABC class", "VED": "VED", "VED_Category": "VED category", "ABC_VED_Category": "ABC-VED",
     "Reorder_Status": "Status", "Stock_Status": "Stock record", "Planning_Stock": "Stock on hand",
-    "Reorder_Point": "Reorder point", "Safety_Stock": "Safety stock", "EOQ": "Suggested order (EOQ)",
+    "Reorder_Point": "Reorder point", "Safety_Stock": "Safety stock", "EOQ": "EOQ", "Suggested_Order": "Suggested order",
+    "Order_Multiple": "EOQ batches (n)", "Months_Of_Cover_With_Order": "Months of cover",
+    "Baseline_Suggested_Order": "Baseline suggested order", "Adjusted_Suggested_Order": "Adjusted suggested order",
     "Service_Level": "Service level", "Selected_Model": "Forecast model", "Reliability": "Reliability",
     "Test_MAE": "Test MAE", "Test_RMSE": "Test RMSE", "Test_MAPE": "Test MAPE",
     "Test_MAPE_Excluded_Zero_Months": "Test MAPE (zero months excluded)", "Test_WAPE": "Test WAPE",
@@ -44,7 +46,8 @@ LABELS = {
     "Planning_Label": "Label", "Suggested_Action": "Suggested action", "Medicine_Key": "Medicine key",
     "ABC_2021": "ABC 2021", "ABC_2022": "ABC 2022", "ABC_2023": "ABC 2023", "ABC_2024": "ABC 2024",
     "ABC_2025": "ABC 2025", "ABC_2021_2025": "ABC 2021-2025", "Demand_Last_12_Months": "Demand, last 12 months",
-    "Months_Of_Cover": "Months of cover", "Slow_Moving": "Slow-moving", "Excess_Stock": "Excess stock",
+    "Months_Of_Cover": "Months of stock at last 12 months' use", "Slow_Moving": "Slow-moving",
+    "Excess_Stock": "Excess stock",
     "Expired_Value_12m_Capped": "Expired value, last 12 months (upper bound)", "Expired_Value_Label": "Expired value note",
     "Review_Reason": "Review reason", "Near_Expiry_Lots": "Near-expiry lots",
     "Near_Expiry_Quantity_Capped": "Near-expiry quantity (capped)", "Near_Expiry_Value_Capped": "Near-expiry value (capped)",
@@ -66,7 +69,8 @@ LABELS = {
     "Expiry_From": "Expiry from", "Expiry_To": "Expiry to", "Min_Expiry": "Earliest expiry",
     "Max_Expiry": "Latest expiry", "Latest_Document_Date": "Latest document date", "Source_File": "Source file",
     "Item_ID": "Item ID", "Item_Description": "Item description", "Ending_Balance": "Ending balance",
-    "Measure_Group": "Measure group", "Order_Value": "Order value (EOQ x unit cost)", "KPI": "KPI",
+    "Measure_Group": "Measure group", "Order_Value": "Order value (suggested order x unit cost)", "KPI": "KPI",
+    "Input": "Assumption", "Replace_With": "Form item",
     "ABC_Class": "ABC class", "Medicine_Count": "Medicines", "Known_ACV": "Spending value",
     "Known_ACV_Share": "Share of spending value", "NON_MOVING": "Non-moving", "PERSISTENT_STABLE": "Persistent, stable",
     "PERSISTENT_VARIABLE": "Persistent, variable", "SPARSE": "Sparse", "Segment_Type": "Segment type",
@@ -84,7 +88,9 @@ LABELS = {
 WHOLE = {"Planning_Stock", "Reorder_Point", "Safety_Stock", "EOQ", "Baseline_Safety_Stock", "Adjusted_Safety_Stock",
          "Baseline_ROP", "Adjusted_ROP", "Change_ROP", "Baseline_EOQ", "Adjusted_EOQ", "Stock_At_As_Of",
          "Near_Expiry_Quantity_Capped", "Near_Expiry_Capped_Quantity", "Quantity", "Ending_Balance", "Lots",
-         "Near_Expiry_Lots", "Medicines", "Count", "Items", "Lead_Time_Days", "Latest_Annual_Issuance"}
+         "Near_Expiry_Lots", "Medicines", "Count", "Items", "Lead_Time_Days", "Latest_Annual_Issuance",
+         "Suggested_Order", "Baseline_Suggested_Order", "Adjusted_Suggested_Order", "Order_Multiple"}
+ONE_DECIMAL = {"Months_Of_Cover_With_Order"}
 PESOS = {"Near_Expiry_Value_Capped", "Expired_Value_12m_Capped", "Expired_Value_Capped", "Value_Capped_PHP",
          "Near_Expiry_Capped_Value", "Unit_Cost", "Ordering_Cost", "Stock_Value", "Consumption_Value", "Average_Cost",
          "Lot_Value", "Order_Value", "Known_ACV", "Latest_ACV"}
@@ -96,7 +102,8 @@ DATES = {"First_Expiry", "Last_Expiry", "Expiration_Date", "Expiry_From", "Expir
          "Latest_Document_Date", "Near_Expiry_As_Of", "Earliest_Document_Date", "Earliest_Expiration_Date",
          "Latest_Expiration_Date"}
 # Codes shown as words; acronyms stay as they are.
-VALUE_WORDS = {"NO_CONSUMPTION": "No consumption", "NAIVE": "Naive", "SEASONAL_NAIVE": "Seasonal naive",
+VALUE_WORDS = {"NO_CONSUMPTION": "No consumption", "class NO_CONSUMPTION": "No consumption", "NAIVE": "Naive",
+               "SEASONAL_NAIVE": "Seasonal naive",
                "PROPHET": "Prophet", "HIGH": "High", "MODERATE": "Moderate", "LOW": "Low",
                "INTERMITTENT": "Intermittent", "PROXY": "Proxy", "PROPONENT": "Proponent",
                "UNCLASSIFIED_COST": "Unclassified (no cost)", "ELIGIBLE": "Eligible", "NON_MOVING": "Non-moving",
@@ -106,6 +113,30 @@ ENUMS = {"Reorder_Status", "Stock_Status", "ABC_Planning", "Selected_Model", "Vo
          "Review_Reason", "Status", "Stable_Rule_Status", "Period_Label", "Planning_Label", "Expired_Value_Label",
          "Scenario_Type", "Suggested_Action", "Segment", "Behavior_Segment", "ABC_Class", "ABC_Eligibility"}
 NOT_AVAILABLE = "not available"
+NOT_CLASSED = "Not classed"                   # no 2025 consumption value: outside the ABC-VED matrix
+# The planning inputs (config/capstone1_planning_inputs.csv) by name; a grid point reads "Sensitivity grid: <input>
+# (<n> of 3)".
+INPUT_LABELS = {"lead_time_days": "Lead time", "ordering_cost_php": "Ordering cost",
+                "ordering_cost_part_order_preparation": "Ordering cost: order preparation",
+                "ordering_cost_part_supplier_follow_up": "Ordering cost: supplier follow-up",
+                "ordering_cost_part_receiving": "Ordering cost: receiving",
+                "ordering_cost_part_payment": "Ordering cost: payment",
+                "ordering_cost_part_office_supplies": "Ordering cost: office supplies",
+                "holding_rate_annual": "Holding rate", "service_level_V": "Service level, Vital",
+                "service_level_E": "Service level, Essential", "service_level_D": "Service level, Desirable"}
+GRID_INPUTS = {"grid_lead_time_days": "lead time", "grid_service_level": "service level",
+               "grid_holding_rate": "holding rate", "grid_ordering_cost": "ordering cost"}
+
+
+def input_label(name: object) -> object:
+    """A planning input's name in words ("holding_rate_annual" -> "Holding rate")."""
+    text = str(name)
+    if text in INPUT_LABELS:
+        return INPUT_LABELS[text]
+    for prefix, words_ in GRID_INPUTS.items():
+        if text.startswith(prefix + "_"):
+            return f"Sensitivity grid: {words_} ({text.rsplit('_', 1)[-1]} of 3)"
+    return name
 
 
 def label(column: str) -> str:
@@ -129,7 +160,20 @@ def _missing(value: object) -> bool:
 
 
 def whole(value: object) -> str:
-    return NOT_AVAILABLE if _missing(value) else f"{float(value):,.0f}"
+    """Whole numbers with commas; a quantity under 1 keeps one decimal (0.4, not 0)."""
+    if _missing(value):
+        return NOT_AVAILABLE
+    number = float(value)
+    if 0 < abs(number) < 1:
+        return f"{number:.1f}" if abs(number) >= 0.05 else ("<0.1" if number > 0 else ">-0.1")
+    return f"{number:,.0f}"
+
+
+def one_decimal(value: object) -> str:
+    """One decimal; an infinite value (no cover: nothing is forecast) is a blank cell."""
+    if _missing(value):
+        return NOT_AVAILABLE
+    return "" if math.isinf(float(value)) else f"{float(value):,.1f}"
 
 
 def pesos(value: object) -> str:
@@ -189,6 +233,8 @@ def yes_no(value: object) -> str:
 def formatter(column: str, dtype) -> Callable[[object], object] | None:
     if column in WHOLE:
         return whole
+    if column in ONE_DECIMAL:
+        return one_decimal
     if column in PESOS:
         return pesos
     if column in SHARES:
@@ -204,21 +250,37 @@ def formatter(column: str, dtype) -> Callable[[object], object] | None:
     if column == "Reorder_Status":
         return lambda v: NOT_AVAILABLE if _missing(v) else status_term(v)
     if column == "ABC_VED_Category":            # a medicine with no 2025 consumption value is outside the matrix
-        return lambda v: "outside the matrix" if _missing(v) else v
+        return lambda v: NOT_CLASSED if _missing(v) else v
     if column in ENUMS:
         return lambda v: NOT_AVAILABLE if _missing(v) else sentence(v)
     if pd.api.types.is_numeric_dtype(dtype):
         return number
-    return lambda v: NOT_AVAILABLE if _missing(v) else (VALUE_WORDS.get(v, v) if isinstance(v, str) else v)
+    return lambda v: NOT_AVAILABLE if _missing(v) else (words(v) if isinstance(v, str) else v)
+
+
+def words(text: str) -> str:
+    """A code as a word, also inside a sentence ("class NO_CONSUMPTION" -> "class no consumption")."""
+    if text in VALUE_WORDS:
+        return VALUE_WORDS[text]
+    return text.replace("NO_CONSUMPTION", "no consumption")
 
 
 def display(frame: pd.DataFrame):
     """The frame for st.dataframe: human column labels and formatted values, as a pandas Styler, so sorting a column
     still sorts by its value. Missing values read "not available" (st.dataframe's placeholder; Streamlit draws missing
-    cells itself), except that a medicine outside the ABC-VED matrix reads so."""
+    cells itself), except that a medicine outside the ABC-VED matrix reads "Not classed", a lot number of 0 or blank
+    "not recorded", and the months of cover of a medicine with nothing forecast is blank."""
     if "ABC_VED_Category" in frame and frame.ABC_VED_Category.isna().any():
         frame = frame.assign(ABC_VED_Category=frame.ABC_VED_Category.astype(object).where(
-            frame.ABC_VED_Category.notna(), "outside the matrix"))
+            frame.ABC_VED_Category.notna(), NOT_CLASSED))
+    if "Months_Of_Cover_With_Order" in frame and "Forecast_Planning_Month" in frame:
+        # nothing forecast: no months of cover, a blank cell (a value, so the column still sorts as numbers)
+        zero = frame.Months_Of_Cover_With_Order.isna() & frame.Forecast_Planning_Month.le(0)
+        frame = frame.assign(Months_Of_Cover_With_Order=frame.Months_Of_Cover_With_Order.mask(zero, math.inf))
+    if "Lot_No" in frame:                       # a lot number of 0 or blank was not recorded in the export
+        lot = frame.Lot_No.astype(object)
+        blank = lot.isna() | lot.astype(str).str.strip().isin(["", "0", "0.0"])
+        frame = frame.assign(Lot_No=lot.where(~blank, "not recorded"))
     renamed = frame.rename(columns={c: label(c) for c in frame.columns})
     renamed = renamed.loc[:, ~renamed.columns.duplicated()]
     formats = {label(c): formatter(c, frame[c].dtype) for c in frame.columns}
@@ -231,22 +293,23 @@ DO_NOT_REORDER, NO_DEMAND_ACTION, NO_ORDER, CHECK_RECORD = ("Do not reorder", "N
                                                           "Check the stock record")
 
 
-def suggested_action(status: object, abc: object = None, eoq: object = None, stock: object = None,
+def suggested_action(status: object, abc: object = None, quantity: object = None, stock: object = None,
                      excess: object = None) -> str:
-    """The plain action of a medicine, restated from its existing reorder status, ABC class, EOQ, stock and excess-stock
-    flag; the first that applies:
-    no plan row (not forecast) -> "Not planned (no forecast)"; below safety stock -> "Order urgently <EOQ>"; at or below
-    ROP -> "Order <EOQ>"; a negative stock record -> "Check the stock record"; no 2025 consumption with stock held, or
+    """The plain action of a medicine, restated from its existing reorder status, ABC class, suggested order (n x EOQ,
+    the (s, nQ) policy of the planning step), stock and excess-stock flag; the first that applies:
+    no plan row (not forecast) -> "Not planned (no forecast)"; below safety stock -> "Order urgently <suggested order>";
+    at or below ROP -> "Order <suggested order>"; a negative stock record -> "Check the stock record"; no 2025
+    consumption with stock held, or
     excess stock (above ROP + EOQ) -> "Do not reorder"; no demand expected (ROP 0 or a next-month forecast below 0.5
     units) -> "No demand expected"; above ROP -> "No order needed".
     """
     if _missing(status):
         return "Not planned (no forecast)"
-    quantity = "" if _missing(eoq) else f" {float(eoq):,.0f}"
+    amount = "" if _missing(quantity) else f" {float(quantity):,.0f}"
     if status == BELOW_SS:
-        return f"Order urgently{quantity}" if quantity else "Order urgently (EOQ not available)"
+        return f"Order urgently{amount}" if amount else "Order urgently (order quantity not available)"
     if status == AT_ROP:
-        return f"Order{quantity}" if quantity else "Order (EOQ not available)"
+        return f"Order{amount}" if amount else "Order (order quantity not available)"
     if status == NEGATIVE:
         return CHECK_RECORD
     held = not _missing(stock) and float(stock) > 0
@@ -266,7 +329,7 @@ def with_action(frame: pd.DataFrame, reorder: pd.DataFrame | None = None) -> pd.
         return frame
     source = frame
     on = next((c for c in ("Medicine_Key", "Brand_Name") if reorder is not None and c in frame and c in reorder), None)
-    extra = [c for c in ("Reorder_Status", "EOQ", "Planning_Stock", "Excess_Stock")
+    extra = [c for c in ("Reorder_Status", "Suggested_Order", "Planning_Stock", "Excess_Stock")
              if on and c not in frame and c in reorder]
     if extra:
         lookup = reorder.drop_duplicates(on).set_index(on)[extra]
@@ -274,7 +337,7 @@ def with_action(frame: pd.DataFrame, reorder: pd.DataFrame | None = None) -> pd.
     actions = [suggested_action(s, a, q, h, x) for s, a, q, h, x in zip(
         source.get("Reorder_Status", pd.Series(index=source.index, dtype=object)),
         source.get("ABC_Planning", pd.Series(index=source.index, dtype=object)),
-        source.get("EOQ", pd.Series(index=source.index, dtype=float)),
+        source.get("Suggested_Order", pd.Series(index=source.index, dtype=float)),
         source.get("Planning_Stock", pd.Series(index=source.index, dtype=float)),
         source.get("Excess_Stock", pd.Series(index=source.index, dtype=object)))]
     out = frame.copy()

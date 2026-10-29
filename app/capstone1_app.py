@@ -11,8 +11,9 @@ runs on its own). The root URL and the earlier page addresses (/overview and the
 
 Every value shown is a value of the Capstone 1 data mart (database/staging/capstone1/capstone1.duckdb, or CAPSTONE1_DB),
 read-only, formatted by app/c1_format.py; the suggested actions restate each medicine's reorder status, ABC class and
-EOQ. The look is the existing app's visual system, in light or dark mode (app/c1_ui.py, app/c1_theme.py). The pages show
-planning estimates for review by pharmacy and purchasing personnel; they place no orders and rank no option.
+suggested order (n x EOQ, the (s, nQ) policy of the planning step). The look is the existing app's visual system, in
+light or dark mode (app/c1_ui.py, app/c1_theme.py). The pages show planning estimates for review by pharmacy and
+purchasing personnel; they place no orders and rank no option.
 """
 
 from __future__ import annotations
@@ -49,7 +50,14 @@ REDIRECTS = {"overview": DECISIONS, "reorder-planning": REORDER, "waste-and-expi
              "medicine-detail": MEDICINE, "analysis-and-evidence": EVIDENCE, "monthly-update": UPDATE_PAGE[0]}
 DEMO_NOTE = ("Demonstration data: synthetic medicines, demand, stock, costs and expiry lots, generated with a fixed "
              "seed. Not CDH data; no figure on this page describes Calamba Doctors Hospital.")
-ASSUMPTION_LINE = "Planning estimates on proponent inputs (P). The DSS suggests; the pharmacist decides."
+ASSUMPTION_LINE = ("Planning estimates use assumptions set by the project team (see How these numbers are made). "
+                   "The DSS suggests; the pharmacist decides.")
+ORDER_RULE_NOTE = ("Suggested order: when a medicine's stock on hand is at or below its reorder point, n x EOQ, with n the "
+                   "smallest whole number that brings stock on hand plus the order above the reorder point (the (s, nQ) "
+                   "policy; Axsäter, Inventory Control, 3rd ed., 2015). Stock on hand stands in for the inventory "
+                   "position (stock on hand plus stock on order): the PHARMACY exports record no quantity on order. EOQ, "
+                   "the reorder point and safety stock are not changed by it. Months of cover: (stock on hand + suggested "
+                   "order) / the planning month's forecast, blank when nothing is forecast.")
 PROXY_NOTE = ("Planning estimates. Lead time (not recorded in CDH data), ordering cost, holding-cost rate and the "
               "service level of each VED class are proponent decisions and assumptions (P); VED classes are the "
               "proponents' assignment by documented clinical criteria, delegated by the chief pharmacist.")
@@ -59,9 +67,14 @@ SUDDEN_CHANGE_NOTE = ("Forecasts follow the patterns in the 2021-2025 records (a
                       "behavior may not be captured.")
 NEAR_COLUMNS = ["Near_Expiry_Lots", "Near_Expiry_Quantity_Capped", "Near_Expiry_Value_Capped"]
 # Reorder Planning: the decision columns first; the CSV keeps every column.
-REORDER_COLUMNS = ["Brand_Name", "Suggested_Action", "Reorder_Status", "Planning_Stock", "Reorder_Point", "EOQ",
-                   "ABC_VED_Category", "Reliability", "Unit", "Dosage_Form", "ABC_Planning", "VED", "Service_Level",
-                   "Safety_Stock", "Forecast_Planning_Month", "Stock_Status", "Planning_Label"]
+REORDER_COLUMNS = ["Brand_Name", "Suggested_Action", "Reorder_Status", "Planning_Stock", "Reorder_Point",
+                   "Suggested_Order", "ABC_VED_Category", "Reliability", "Months_Of_Cover_With_Order", "EOQ",
+                   "Order_Multiple", "Unit", "Dosage_Form", "ABC_Planning", "VED", "Service_Level", "Safety_Stock",
+                   "Forecast_Planning_Month", "Stock_Status", "Planning_Label"]
+# The first eight columns fit the page at 1366px with the sidebar open (an 890px table): each at least its header's
+# width, the long text wrapping in taller rows (pixels).
+REORDER_WIDTHS = {"Brand_Name": 146, "Suggested_Action": 130, "Reorder_Status": 92, "Planning_Stock": 102,
+                  "Reorder_Point": 100, "Suggested_Order": 116, "ABC_VED_Category": 76, "Reliability": 124}
 FORECAST_COLUMNS = ["Brand_Name", "Suggested_Action", "Dosage_Form", "ABC_Planning", "Selected_Model", "Volume_Class",
                     "Test_MAE", "Test_RMSE", "Test_MAPE", "Test_MAPE_Excluded_Zero_Months", "Test_WAPE", "Test_MASE",
                     "Reliability", "Prospective_2026_MAE", "Limited_Planning_Estimate"]
@@ -69,9 +82,11 @@ ABC_COLUMNS = ["Brand_Name", "Suggested_Action", "Dosage_Form", "ABC_2021", "ABC
                "ABC_2025", "ABC_2021_2025", "ABC_Planning", "VED", "VED_Category", "ABC_VED_Category"]
 FLAGGED_COLUMNS = ["Brand_Name", "Unit", "Month", "Net_Demand", "Item_Average", "Rule", "Period_Label"]
 SENSITIVITY_COLUMNS = ["Scenario_Type", "Scenario", "Baseline_Safety_Stock", "Adjusted_Safety_Stock", "Baseline_ROP",
-                       "Adjusted_ROP", "Change_ROP_Pct", "Baseline_EOQ", "Adjusted_EOQ", "Change_EOQ_Pct"]
+                       "Adjusted_ROP", "Change_ROP_Pct", "Baseline_EOQ", "Adjusted_EOQ", "Change_EOQ_Pct",
+                       "Baseline_Suggested_Order", "Adjusted_Suggested_Order"]
 GRID_COLUMNS = ["Lead_Time_Days", "Service_Level", "Holding_Rate", "Ordering_Cost", "Safety_Stock", "Reorder_Point",
-                "EOQ"]
+                "EOQ", "Suggested_Order"]
+EOQ_ONLY = "EOQ cost range"              # the scenarios of ordering cost and holding rate: they change EOQ, not ROP
 LOT_COLUMNS = ["Brand_Name", "Suggested_Action", "Expiration_Date", "Lot_No", "Near_Expiry_Capped_Quantity",
                "Near_Expiry_Capped_Value", "Unit", "Dosage_Form"]
 FLAGGED_CAPTION = ("Pandemic period: a month of 2022-2023 flagged by the outlier rule (more than 100% above or 50% below "
@@ -228,13 +243,13 @@ def download(frame: pd.DataFrame, name: str, key: str) -> None:
 # ------------------------------------------------------------------ This month's decisions
 
 def last_updated(reorder: pd.DataFrame) -> str | None:
-    """"Last updated: <as-of month>, <date the mart file was written>" (the mart in use: an update or a rollback
-    replaces the file)."""
+    """"Data through <as-of month> · refreshed <date the mart file was written>" (the mart in use: an update or a
+    rollback replaces the file)."""
     if "As_Of_Month" not in reorder or not len(reorder):
         return None
     month = pd.Period(reorder.As_Of_Month.iloc[0], freq="M")
     written = datetime.fromtimestamp(DATABASE.stat().st_mtime)
-    return f"Last updated: {month.strftime('%B %Y')}, {written.day} {written.strftime('%B %Y')}"
+    return f"Data through {month.strftime('%b %Y')} · refreshed {written.day} {written.strftime('%b %Y')}"
 
 
 def go(page: str, presets: dict[str, object], params: dict[str, str]) -> None:
@@ -250,8 +265,9 @@ def decisions() -> None:
         st.caption(updated)
     chosen = selections(reorder)
     now = reorder[chosen["reorder-now"]]
-    order_value = (now.EOQ * now.Unit_Cost).sum(min_count=1) if {"EOQ", "Unit_Cost"} <= set(now) else float("nan")
-    priced = int((now.EOQ * now.Unit_Cost).notna().sum()) if {"EOQ", "Unit_Cost"} <= set(now) else 0
+    cost = now.Suggested_Order * now.Unit_Cost if {"Suggested_Order", "Unit_Cost"} <= set(now) \
+        else pd.Series(dtype=float)
+    order_value, priced = cost.sum(min_count=1) if len(cost) else float("nan"), int(cost.notna().sum())
     vital_now = int(now.VED.eq("V").sum()) if "VED" in now else 0
     critical = reorder[chosen["critical"]]
     no_use, excess = int(chosen["no-use"].sum()), int(chosen["excess"].sum())
@@ -266,7 +282,8 @@ def decisions() -> None:
     with first:
         if c1_ui.question_card("order", "What do I order now, and how much?", f"{len(now):,} medicines",
                                f"<strong>{vital_now:,}</strong> Vital. Suggested orders "
-                               f"<strong>{c1_format.pesos(order_value)}</strong> (EOQ x unit cost, {priced:,} priced)."):
+                               f"<strong>{c1_format.pesos(order_value)}</strong> (suggested order x unit cost, "
+                               f"{priced:,} priced)."):
             go(REORDER, {"view": "Reorder now", "all": False}, {"view": "Reorder now"})
     with second:
         if c1_ui.question_card("run-out", "Which critical medicines could run out?", f"{len(critical):,} medicines",
@@ -352,13 +369,32 @@ def stock_health_details() -> None:
     tiles("stock-health", [(m, values[m], icon) for m, icon in (
         ("Active medicines (demand in the last 12 months)", "medicine"), ("Class A medicines (2025)", "validation"),
         ("Reorder review count", "procurement"), ("Near-expiry count", "expiry")) if m in values])
-    tiles("review-counts", [("Slow-moving", int(review.Slow_Moving.sum()), "expiry"),
-                            ("Excess stock", int(review.Excess_Stock.sum()), "expiry")])
+    unused_tiles(review, "review-counts")
     st.subheader("Stock value at month-end (PHP)")
     trend = table("c1_tab_stock_trend")
     c1_ui.line_chart(trend.set_index("Month").Stock_Value.rename("Stock value (PHP)").map(float), y_title="PHP")
     c1_ui.show_table(health[["Metric", "Value", "Note"]], row_height=TABLE_ROW_WRAP)
     data_check_status()
+
+
+def unused_tiles(review: pd.DataFrame, name: str) -> None:
+    """Do not reorder first (the count of "What is sitting unused?"), then the slow-moving and excess-stock medicines of
+    the review list, each with how many of them are also Do not reorder. Slow-moving (no use in the last 3 months, or
+    more than 6 months of stock at the last 12 months' use) is a watch list, not a reorder rule."""
+    reorder = reorder_list()
+    unused = selections(reorder)["unused"]
+    on = "Medicine_Key" if "Medicine_Key" in review and "Medicine_Key" in reorder else "Brand_Name"
+    also = review[on].isin(set(reorder.loc[unused, on]))
+    slow, excess = (review[c].fillna(False).astype(bool) for c in ("Slow_Moving", "Excess_Stock"))
+
+    def overlap(flag: pd.Series) -> str:
+        both = int((flag & also).sum())
+        return "all of them are also Do not reorder" if both == int(flag.sum()) and both else \
+            f"{both:,} of them are also Do not reorder"
+    tiles(name, [(c1_format.DO_NOT_REORDER, int(unused.sum()), "cross",
+                  "no consumption in 2025 with stock held, or excess stock (above ROP + EOQ)"),
+                 ("Slow-moving", int(slow.sum()), "expiry", f"watch, use first; {overlap(slow)}"),
+                 ("Excess stock", int(excess.sum()), "expiry", overlap(excess))])
 
 
 def data_check_status() -> None:
@@ -369,7 +405,7 @@ def data_check_status() -> None:
                           ("Negative stock records",
                            int(dq.set_index("Check").Count.get("Negative stock records (month-ends)", 0)), "attention")])
     if len(missing):
-        st.caption(f"{len(missing)} expiry exports are needed for near-expiry and are not on disk.")
+        st.caption(f"{len(missing):,} expiry exports are needed for near-expiry and are not on disk.")
     st.page_link(PAGES[EVIDENCE], label="Full checks: Analysis and Evidence")
 
 
@@ -400,7 +436,8 @@ def reorder_planning() -> None:
         listed = priority(listed) if not show_all and view_name in ("reorder-now", "critical") \
             else listed.sort_values("Brand_Name")
         view = filter_bar(listed, "reorder", status="Reorder_Status")
-        show(view[present(view, ["Medicine_Key", *REORDER_COLUMNS])], key="reorder-table")
+        show(view[present(view, ["Medicine_Key", *REORDER_COLUMNS])], key="reorder-table", widths=REORDER_WIDTHS,
+             row_height=TABLE_ROW_WRAP)
         download(view, "reorder_planning.csv", "reorder-csv")
     with c1_ui.collapsible("what-if", "What if?", expanded=st.query_params.get("whatif") == "1"):
         what_if(reorder)
@@ -439,36 +476,47 @@ def what_if(reorder: pd.DataFrame) -> None:
                                       if base_level in levels else 0, format_func=c1_format.share, key="wi_service")
         demand = demand_col.selectbox("Demand change", demands, index=demands.index(NO_CHANGE), key="wi_demand")
         adjusted = adjusted_case(view, own, inputs, lead, service, base_lead, base_level, demand)
-        baseline, other = st.columns(2)
-        with baseline:
-            st.markdown(f"**Baseline** ({base_lead:,.0f} days, the VED class's service level, demand as forecast)")
-            tiles("what-if-baseline", [("Baseline ROP", c1_format.whole(base.Baseline_ROP), "procurement"),
-                                       ("Baseline EOQ", c1_format.whole(base.Baseline_EOQ), "procurement"),
-                                       ("Baseline safety stock", c1_format.whole(base.Baseline_Safety_Stock),
-                                        "governance")])
-        with other:
-            st.markdown(f"**Adjusted** ({lead:,.0f} days, {c1_format.share(service)}, demand {demand})")
-            if adjusted is None:
-                st.info("Not in the mart: the grid varies lead time and service level with demand as forecast, and "
-                        "the demand scenarios vary demand alone. Set the demand change to 0%, or lead time and service "
-                        "level to the baseline.")
-            else:
-                tiles("what-if-adjusted", [("Adjusted ROP", c1_format.whole(adjusted["rop"]), "procurement"),
-                                           ("Adjusted EOQ", c1_format.whole(adjusted["eoq"]), "procurement"),
-                                           ("Adjusted safety stock", c1_format.whole(adjusted["ss"]), "governance")])
+        # baseline, then adjusted, each a full row: four tiles in half a page would break their labels
+        st.markdown(f"**Baseline** ({base_lead:,.0f} days, the VED class's service level, demand as forecast)")
+        tiles("what-if-baseline", [("Baseline ROP", c1_format.whole(base.Baseline_ROP), "procurement"),
+                                   ("Baseline EOQ", c1_format.whole(base.Baseline_EOQ), "procurement"),
+                                   ("Baseline suggested order",
+                                    c1_format.whole(base.get("Baseline_Suggested_Order")), "procurement"),
+                                   ("Baseline safety stock", c1_format.whole(base.Baseline_Safety_Stock),
+                                    "governance")])
+        st.markdown(f"**Adjusted** ({lead:,.0f} days, {c1_format.share(service)}, demand {demand})")
+        if adjusted is None:
+            st.info("Not in the mart: the grid varies lead time and service level with demand as forecast, and "
+                    "the demand scenarios vary demand alone. Set the demand change to 0%, or lead time and service "
+                    "level to the baseline.")
+        else:
+            tiles("what-if-adjusted", [("Adjusted ROP", c1_format.whole(adjusted["rop"]), "procurement"),
+                                       ("Adjusted EOQ", c1_format.whole(adjusted["eoq"]), "procurement"),
+                                       ("Adjusted suggested order", c1_format.whole(adjusted["order"]),
+                                        "procurement"),
+                                       ("Adjusted safety stock", c1_format.whole(adjusted["ss"]), "governance")])
+        moves_rop = ~view.Scenario_Type.astype(str).eq(EOQ_ONLY)
         st.subheader("Change in the reorder point by scenario")
-        labels = view.Scenario_Type.astype(str) + ": " + view.Scenario.astype(str)
-        c1_ui.bar_chart(pd.Series(view.Change_ROP.to_numpy(), index=pd.Index(labels, name="Scenario"),
+        rop = view[moves_rop]
+        labels = rop.Scenario_Type.astype(str) + ": " + rop.Scenario.astype(str)
+        c1_ui.bar_chart(pd.Series(rop.Change_ROP.to_numpy(), index=pd.Index(labels, name="Scenario"),
                                   name="Change in ROP"), horizontal=True, value_title="Change in reorder point",
                         order=labels.tolist(), value_format=",.1f")
-    c1_ui.show_table(view[present(view, SENSITIVITY_COLUMNS)])
+        costs = view[~moves_rop]
+        if len(costs) and "Change_EOQ_Pct" in costs:
+            st.subheader("Change in EOQ by ordering cost and holding rate (%)")
+            st.caption("Ordering cost and holding rate change EOQ only; the reorder point stays the same.")
+            names = costs.Scenario.astype(str)
+            c1_ui.bar_chart(pd.Series(costs.Change_EOQ_Pct.to_numpy(), index=pd.Index(names, name="Scenario"),
+                                      name="Change in EOQ (%)"), horizontal=True, value_title="Change in EOQ (%)",
+                            order=names.tolist(), value_format=",.1f")
+    with st.expander(f"Every scenario for this medicine, baseline beside adjusted ({len(view):,})"):
+        c1_ui.show_table(view[present(view, SENSITIVITY_COLUMNS)])
     with st.expander(f"{GRID_HEADING} ({len(own):,} combinations)"):
         st.subheader(GRID_HEADING)
         st.caption(GRID_CAPTION)
         c1_ui.show_table(own[present(own, GRID_COLUMNS)])
         download(own, "sensitivity_grid.csv", "grid-csv")
-    st.subheader("Planning assumptions")
-    c1_ui.show_table(assumptions, row_height=TABLE_ROW_WRAP)
 
 
 def planning_inputs(assumptions: pd.DataFrame) -> dict[str, float]:
@@ -505,14 +553,15 @@ def adjusted_case(view: pd.DataFrame, grid: pd.DataFrame, inputs: dict[str, floa
         if not len(rows):
             return None
         r = rows.iloc[0]
-        return {"rop": r.Reorder_Point, "eoq": r.EOQ, "ss": r.Safety_Stock}
+        return {"rop": r.Reorder_Point, "eoq": r.EOQ, "ss": r.Safety_Stock, "order": r.get("Suggested_Order")}
     if lead != base_lead or abs(service - base_level) > 1e-9:
         return None
     rows = view[view.Scenario_Type.astype(str).str.startswith("Demand (illustrative)") & view.Scenario.eq(demand)]
     if not len(rows):
         return None
     r = rows.iloc[0]
-    return {"rop": r.Adjusted_ROP, "eoq": r.Adjusted_EOQ, "ss": r.Adjusted_Safety_Stock}
+    return {"rop": r.Adjusted_ROP, "eoq": r.Adjusted_EOQ, "ss": r.Adjusted_Safety_Stock,
+            "order": r.get("Adjusted_Suggested_Order")}
 
 
 # ------------------------------------------------------------------ Waste and Expiry
@@ -521,8 +570,7 @@ def waste_expiry() -> None:
     review = c1_format.with_action(table("c1_tab_waste_review"), table("c1_tab_reorder"))
     near_status = review.Near_Expiry_Status.iloc[0] if len(review) else "not available"
     with card("waste"):
-        tiles("waste", [("Slow-moving", int(review.Slow_Moving.sum()), "expiry"),
-                        ("Excess stock", int(review.Excess_Stock.sum()), "expiry")])
+        unused_tiles(review, "waste")
         if near_status != "available":
             missing = table("c1_dq_expiry_missing")
             months = sorted(missing.Month) if len(missing) and "Month" in missing else []
@@ -677,13 +725,12 @@ def medicine_detail() -> None:
     with card("detail-stock", "Stock and reorder"):
         c1_ui.show_table(reorder[present(reorder, REORDER_COLUMNS)])
     with card("detail-sensitivity", "What if"):
-        sensitivity = rows_for(table("c1_tab_sensitivity"), key, name)
-        c1_ui.show_table(sensitivity[present(sensitivity, SENSITIVITY_COLUMNS)])
-        st.subheader(GRID_HEADING)
-        st.caption(GRID_CAPTION)
-        grid = rows_for(table("c1_tab_sensitivity_grid"), key, name)
-        with st.expander(f"Every combination ({len(grid):,})"):
-            c1_ui.show_table(grid[present(grid, GRID_COLUMNS)])
+        planned = name in set(table("c1_tab_sensitivity").Brand_Name.dropna())
+        st.markdown("This medicine's lead time, service level and demand scenarios, baseline beside adjusted, are in "
+                    "What if? on Reorder Planning." if planned else
+                    "No scenarios for this medicine: it has no reorder plan (no forecast).")
+        if st.button("Open in What if?", key="open-what-if", type="primary", disabled=not planned):
+            go(REORDER, {"wi_medicine": name}, {"whatif": "1", "wi_medicine": name})
 
 
 # ------------------------------------------------------------------ Analysis and Evidence
@@ -755,13 +802,15 @@ def forecast_evidence() -> None:
     if len(comparison):
         wide = comparison.pivot_table(index=["Measure_Group", "Measure"], columns="Variant", values="Value",
                                       aggfunc="first").reset_index()
-        c1_ui.show_table(wide)
+        c1_ui.show_table(wide, widths={"Measure_Group": 270, "Measure": 210})
     annual("forecast_section")
 
 
 def covid_period() -> None:
-    """Limitation 8: the pandemic-period outputs, each labelled as such."""
-    st.subheader("Pandemic period (2021-2023)")
+    """Limitation 8: the pandemic-period outputs, each labelled as such. The outlier rule tests 2022-2023 only: a month
+    is tested once 12 months of history precede it."""
+    st.subheader("Pandemic period (2021–2023; outlier rule tested on 2022–2023)")
+    st.caption("2021 is not tested because the rule needs 12 months of history.")
     flagged = table("c1_tab_covid_flagged_months")
     comparison = c1_format.with_action(table("c1_tab_covid_period_comparison"), table("c1_tab_reorder"))
     stable = table("c1_tab_covid_stable")
@@ -769,7 +818,7 @@ def covid_period() -> None:
                        ("Medicines with a flagged month", int(flagged.Medicine_Key.nunique()) if len(flagged) else 0,
                         "medicine"), ("Stable across periods", len(stable), "check")])
     st.caption(FLAGGED_CAPTION)
-    with st.expander(f"Flagged months for review (pandemic period 2021-2023): {len(flagged)}"):
+    with st.expander(f"Flagged months for review (pandemic period 2021-2023): {len(flagged):,}"):
         view = filter_bar(flagged, "flagged", status="Rule")
         c1_ui.show_table(view[present(view, FLAGGED_COLUMNS)])
     st.caption("Pandemic (2021-2023) vs post-pandemic (2024-2025), net demand per medicine: mean monthly demand, "
@@ -778,7 +827,7 @@ def covid_period() -> None:
     show(view[present(view, ["Medicine_Key", "Brand_Name", "Suggested_Action", "Unit", "Pandemic_Mean_Monthly_Demand",
                              "Pandemic_CV", "Post_Pandemic_Mean_Monthly_Demand", "Post_Pandemic_CV", "Ratio_Of_Means",
                              "CV_Change", "Stable_Across_Periods", "Period_Label"])], key="pandemic-table")
-    with st.expander(f"Stable across periods: {len(stable)} (ratio of means 0.8-1.25 and |CV change| <= 0.25; "
+    with st.expander(f"Stable across periods: {len(stable):,} (ratio of means 0.8-1.25 and |CV change| <= 0.25; "
                      "a default pending the chief pharmacist)"):
         view = filter_bar(stable, "stable", status="Stable_Rule_Status")
         c1_ui.show_table(view[present(view, ["Brand_Name", "Unit", "Ratio_Of_Means", "CV_Change", "Period_Label",
@@ -792,7 +841,7 @@ def data_quality() -> None:
                            ("Negative stock records",
                             int(dq.set_index("Check").Count.get("Negative stock records (month-ends)", 0)), "attention")])
     c1_ui.show_table(dq[["Check", "Count"]])
-    with st.expander(f"Inactive medicines (no stock, no demand): {len(inactive)}"):
+    with st.expander(f"Inactive medicines (no stock, no demand): {len(inactive):,}"):
         view = filter_bar(inactive, "inactive", status="Status")
         c1_ui.show_table(view[present(view, ["Brand_Name", "Generic_Name", "Unit"])])
     with st.expander("Negative stock records"):
@@ -808,7 +857,7 @@ def data_quality() -> None:
     c1_ui.show_table(table("c1_dq_expiry_exports"))
     missing = table("c1_dq_expiry_missing")
     if len(missing):
-        st.warning(f"{len(missing)} expiry exports are needed for near-expiry and are not on disk.")
+        st.warning(f"{len(missing):,} expiry exports are needed for near-expiry and are not on disk.")
         c1_ui.show_table(missing)
     annual("data_quality_section")
 
@@ -821,8 +870,7 @@ def kpis() -> None:
                   ("Not met", int(counts.get("not met", 0)), "cross")])
     st.caption("The KPIs measure whether the planning outputs are generated and interpretable; they do not claim "
                "operational improvement. Pending: the output exists but waits for a confirmation the target names.")
-    c1_ui.show_table(table_kpi[["KPI", "Target", "Evidence", "Status", "Note"]], row_height=150,
-                     widths={"KPI": 140, "Target": 230, "Evidence": 290, "Status": 80, "Note": 170})
+    c1_ui.static_table(table_kpi[["KPI", "Target", "Evidence", "Status", "Note"]])
 
 
 # ------------------------------------------------------------------ Pages and navigation
@@ -838,7 +886,8 @@ PANEL_PAGE = (EVIDENCE, "evidence", analysis_evidence, "shield")
 
 
 def how_numbers_are_made() -> None:
-    """The assumptions: one short line, the details in an expander (once per page)."""
+    """The assumptions: one short line, the details in an expander (once per page): the planning inputs, the order
+    rule and the planning-assumptions table, each input by its name."""
     st.caption(ASSUMPTION_LINE)
     with st.expander("How these numbers are made"):
         st.markdown(PROXY_NOTE)
@@ -846,7 +895,14 @@ def how_numbers_are_made() -> None:
         if (month := as_of_text()) is not None:
             st.markdown(f"Stock is as of the month-end of {month} (the latest PHARMACY export loaded). Lists, counts and "
                         "pesos are values of the Capstone 1 data mart; a suggested action restates a medicine's reorder "
-                        "status, ABC class and EOQ.")
+                        "status, ABC class and suggested order.")
+        st.markdown(ORDER_RULE_NOTE)
+        assumptions = table("c1_tab_assumptions")
+        if len(assumptions):
+            st.markdown("**Planning assumptions**")
+            named = assumptions.assign(Input=assumptions.Input.map(c1_format.input_label)) \
+                if "Input" in assumptions else assumptions
+            c1_ui.static_table(named)
 
 
 def url_paths() -> list[str]:
@@ -861,7 +917,7 @@ def planning_page(title: str, render: Callable[[], None]) -> Callable[[], None]:
             st.error(f"The planning data mart was not found at {DATABASE}. Run the Capstone 1 build first.")
             st.stop()
         month = as_of_text()
-        c1_ui.topbar(title, f"Stock as of {month}" if month else None, url_paths())
+        c1_ui.topbar(f"Stock as of {month}" if month else None, url_paths())
         c1_ui.page_header(PLANNING_SECTION, title)
         if DEMO:
             st.warning(DEMO_NOTE)
@@ -875,7 +931,7 @@ def update_page() -> None:
     """The Monthly Update page, imported only when shown (and never in DEMO mode)."""
     import c1_update_page
     month = as_of_text() if DATABASE.exists() else None
-    c1_ui.topbar(UPDATE_PAGE[0], f"Stock as of {month}" if month else None, url_paths())
+    c1_ui.topbar(f"Stock as of {month}" if month else None, url_paths())
     c1_ui.page_header(PLANNING_SECTION, UPDATE_PAGE[0])
     c1_update_page.monthly_update()
     c1_ui.footer()
@@ -889,8 +945,8 @@ def redirect(target: str) -> Callable[[], None]:
 
 
 def sidebar(current: st.Page) -> None:
-    """The page buttons: the monthly pages (and, locally, Monthly Update), then Analysis and Evidence under a small
-    "For the panel" label."""
+    """The page buttons: the monthly pages (and, locally, Monthly Update), then Analysis and Evidence under the
+    "For the panel" label (the same label style as the first group's)."""
     keys = {title: f"sidebar-nav-{c1_ui.slug(title)}" for title in PAGES}
     icons = {keys[title]: icon for title, _, _, icon in [*PLANNING_PAGES, PANEL_PAGE]}
     if SHOW_UPDATE:
@@ -901,14 +957,15 @@ def sidebar(current: st.Page) -> None:
         c1_ui.nav_group(PLANNING_SECTION)
         for title, page in PAGES.items():
             if title == EVIDENCE:
-                c1_ui.nav_group(PANEL_GROUP, small=True)
+                c1_ui.nav_group(PANEL_GROUP)
             if c1_ui.nav_button(title, keys[title], page.url_path == current.url_path):
                 # a page button opens the page's default list ("Show me" and bookmarks set theirs)
                 st.session_state.update(view=next(iter(VIEWS)), all=False, sort=next(iter(SORTS)))
                 st.switch_page(page)
 
 
-st.set_page_config(page_title="Inpatient Pharmacy Planning", layout="wide", initial_sidebar_state="expanded")
+# An integer opens the sidebar at that width (open on a wide screen, collapsed on a phone); it can then be dragged.
+st.set_page_config(page_title="Inpatient Pharmacy Planning", layout="wide", initial_sidebar_state=c1_ui.SIDEBAR_WIDTH)
 PAGES = {title: st.Page(planning_page(title, render), title=title, url_path=path)
          for title, path, render, _ in PLANNING_PAGES}
 if SHOW_UPDATE:

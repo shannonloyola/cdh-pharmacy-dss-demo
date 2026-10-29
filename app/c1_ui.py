@@ -3,9 +3,12 @@
 The stylesheets are the existing ones, installed in the order app/main.py installs them: app/ui_main.css, app/ui_clone.css
 (with the Inter fonts), app/ui_plan.css and ui_theme.THEME_CSS, each in the browser's light or dark mode (app/c1_theme.py).
 The markup reuses their classes: the sidebar brand, group label and page buttons, the page header, the KPI tiles
-(dss-workspace-metric), the white cards, the filter bar (clone-medicine-filters) and the matrix. C1_CSS adds the top bar,
-the question cards and the page-button icons, on the colour tokens of c1_theme. Tables go through c1_format (labels and
-formats); charts are Altair charts in the mode's colours. Markup only: no data or analytical logic.
+(dss-workspace-metric), the white cards, the filter bar (clone-medicine-filters) and the matrix. C1_CSS adds the top bar
+(the stock badge and the mode toggle), the question cards, the sidebar's group label and the page-button icons, on the
+colour tokens of c1_theme. The sidebar keeps Streamlit's own width, drag handle and collapse control: the shared
+stylesheets' fixed sidebar width is left out here (_main_css, _clone_css). Tables go through c1_format (labels and
+formats); charts are Altair charts in the mode's colours, months on a time axis ("Jan 2021"). Markup only: no data or
+analytical logic.
 """
 
 from __future__ import annotations
@@ -74,24 +77,20 @@ C1_CSS = """
 @media(min-width:901px){:is([class*="st-key-c1-"],[class*="st-key-clone-medicine-filters-"],[class*="st-key-clone-section-"]) [data-testid="stHorizontalBlock"]{flex-wrap:nowrap}}
 @media(max-width:1200px){[class*="st-key-c1-metric-grid-"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{flex:1 1 calc(50% - 22px)!important}}
 @media(max-width:600px){[class*="st-key-c1-metric-grid-"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{flex:1 1 100%!important}[class*="st-key-c1-card-"]{padding:16px}.c1-card-title{font-size:22px;margin:-4px -16px 0;padding:0 16px 16px}}
-/* the top bar: page title, stock badge, mode toggle; the badge and toggle never shrink, the title gives way */
-.st-key-c1-topbar{position:fixed;z-index:990;left:348px;right:0;top:0;width:auto!important;height:93px;background:var(--c1-surface);border-bottom:1px solid var(--c1-line);padding:0 32px 0 40px;box-sizing:border-box;flex-wrap:nowrap!important;align-items:center;gap:16px}
+/* the top bar: the stock badge and the mode toggle, on the right. It spans the window under the sidebar (which is
+   drawn above it), so it follows any sidebar width, collapsed or dragged, without moving */
+.st-key-c1-topbar{position:fixed;z-index:990;left:0;right:0;top:0;width:auto!important;height:64px;background:var(--c1-surface);border-bottom:1px solid var(--c1-line);padding:0 32px;box-sizing:border-box;flex-wrap:nowrap!important;align-items:center;justify-content:flex-end;gap:16px}
 .st-key-c1-topbar > div{flex:0 0 auto!important;width:auto!important;min-width:0}
-.st-key-c1-topbar > div:first-child{flex:1 1 auto!important}
-body:has([data-testid="stSidebar"][aria-expanded="false"]) .st-key-c1-topbar{left:0;padding-left:72px}
+.stApp .stMainBlockContainer.block-container{padding-top:88px}
 /* Streamlit's own header is a transparent strip above the top bar: clicks pass through it to the toggle, except on
    its sidebar button */
 .stApp [data-testid="stHeader"]{pointer-events:none}
 .stApp [data-testid="stHeader"] [data-testid="stExpandSidebarButton"],
 .stApp [data-testid="stHeader"] [data-testid="stExpandSidebarButton"] *{pointer-events:auto}
-.stApp [data-testid="stMarkdownContainer"] p.c1-topbar-title{font:600 22px/1.2 Inter,sans-serif;color:var(--c1-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0}
 .c1-badge{display:inline-flex;align-items:center;gap:9px;white-space:nowrap;font:500 15px/1 Inter,sans-serif;color:var(--c1-ink);background:var(--c1-teal-soft);border:1px solid var(--c1-line);border-radius:999px;padding:9px 14px}
 .c1-badge i{width:8px;height:8px;background:var(--c1-teal);border-radius:50%}
-@media(max-width:900px){.st-key-c1-topbar{left:0;height:70px;padding:0 12px 0 56px;gap:8px}.stApp [data-testid="stMarkdownContainer"] p.c1-topbar-title{font-size:17px}}
+@media(max-width:900px){.st-key-c1-topbar{padding:0 12px 0 64px;gap:8px}}
 @media(max-width:600px){.c1-badge{font-size:12px;padding:6px 9px}}
-/* a compact page header: the title is also in the top bar */
-.stApp .dss-workspace-page-header{height:auto!important;min-height:0!important;padding:22px 30px!important;margin-bottom:8px!important}
-.stApp .dss-workspace-heading{font-size:32px}
 /* the assumption line under the header */
 .stApp [data-testid="stMarkdownContainer"] p.c1-assumption{font:400 15px/1.5 Inter,sans-serif;color:var(--c1-text);margin:0}
 /* question cards: one height per row on wide screens, the button at the bottom */
@@ -108,8 +107,19 @@ body:has([data-testid="stSidebar"][aria-expanded="false"]) .st-key-c1-topbar{lef
 .stApp .clone-matrix-cell.strong, .stApp .clone-matrix-cell.strong strong, .stApp .clone-matrix-cell.strong span{color:var(--c1-on-teal)}
 .stApp .clone-matrix-cell.warm{background:var(--c1-amber-cell)}
 .stApp .clone-matrix-cell.warm, .stApp .clone-matrix-cell.warm strong, .stApp .clone-matrix-cell.warm span{color:var(--c1-on-amber)}
-/* the small sidebar label of the panel's page */
-.dss-nav-group.c1-panel{font-size:11px;margin-top:22px;margin-bottom:6px}
+/* the sidebar's group labels, "Inpatient pharmacy planning" and "For the panel": one style, one line */
+.stApp .dss-nav-group.c1-nav-label{font:600 11px/26px Inter,sans-serif;letter-spacing:.16em;color:var(--c1-muted);text-transform:uppercase;white-space:nowrap;margin:22px 18px 6px;max-width:none}
+/* the sidebar: Streamlit's own width (it opens at SIDEBAR_WIDTH, st.set_page_config), drag handle and collapse
+   control, above the top bar. Expanded, it keeps a floor (SIDEBAR_MIN, install_styles) so no label breaks; collapsed,
+   it takes no room and the page widens. The reopen button sits in Streamlit's toolbar, which the shared stylesheets
+   hide: it alone is shown */
+[data-testid="stSidebar"][aria-expanded="false"]{border-right-width:0}
+.stApp [data-testid="stToolbar"]:has([data-testid="stExpandSidebarButton"]){display:flex!important;width:0!important;height:0!important;overflow:visible!important}
+.stApp [data-testid="stToolbar"] *:not(:has([data-testid="stExpandSidebarButton"])):not([data-testid="stExpandSidebarButton"]):not([data-testid="stExpandSidebarButton"] *){display:none!important}
+.stApp [data-testid="stExpandSidebarButton"]{display:flex!important;position:fixed!important;top:11px;left:12px;width:42px!important;height:42px!important;align-items:center;justify-content:center;background:var(--c1-surface)!important;border:1px solid var(--c1-line)!important;border-radius:9px!important;pointer-events:auto!important;z-index:1002!important}
+/* a static table (every row, long text wrapped): the mode's text and line colours */
+.stApp [data-testid="stTable"] :is(th,td){color:var(--c1-text);border-color:var(--c1-line);vertical-align:top}
+.stApp [data-testid="stTable"] th{color:var(--c1-ink)}
 """
 
 
@@ -131,27 +141,56 @@ def install_styles(nav_keys: dict[str, str]) -> None:
     """The existing stylesheets, in app/main.py's order, in the browser's mode, then the tokens, C1_CSS and the
     page-button icons."""
     mode = c1_theme.mode()
-    st.html("<style>" + c1_theme.stylesheet("ui_main.css", mode) + "</style>")
+    st.html("<style>" + _main_css(mode) + "</style>")
     st.html("<style>" + _clone_css(mode) + "</style>")
     st.html("<style>" + c1_theme.stylesheet("ui_plan.css", mode) + "</style>")
     st.html("<style>" + c1_theme.css_for(ui_theme.THEME_CSS, mode) + "</style>")
-    st.html("<style>" + c1_theme.variables(mode) + C1_CSS + nav_icon_css(nav_keys) + "</style>")
+    st.html("<style>" + c1_theme.variables(mode) + C1_CSS + nav_icon_css(nav_keys)
+            + f'[data-testid="stSidebar"][aria-expanded="true"]{{min-width:min({SIDEBAR_MIN}px,90vw)!important}}'
+            + "</style>")
+
+
+# The shared stylesheets' rules that fix the sidebar's width (348px in app/ui_clone.css, 350px in app/ui_main.css) or
+# squeeze its header: with them Streamlit cannot resize the sidebar, and a collapsed one stays partly on screen (it
+# slides by its own width, 300px, while the rule holds it at 348px). This app leaves them out; app/main.py keeps them.
+MAIN_SIDEBAR_RULES = ("    min-width: 21.875rem !important;\n", "    width: 21.875rem !important;\n",
+                      "    min-width: 21.875rem;\n",
+                      '    [data-testid="stSidebar"], [data-testid="stSidebar"] > div:first-child '
+                      "{ min-width: 0 !important; width: auto !important; }\n")
+CLONE_SIDEBAR_RULES = ("width:348px!important;min-width:348px!important;max-width:348px!important;",
+                       '[data-testid="stSidebarHeader"]{height:20px;min-height:20px;padding:0 12px}\n',
+                       '[data-testid="stSidebar"]{min-width:310px!important;max-width:310px!important;width:310px!important}')
+# The opening width and the floor: the longest label ("This month's decisions", 18px) needs 355px to stay on one line,
+# so the sidebar opens at 360px (348px before, where it took two) and can be dragged wider, not narrower (on a phone,
+# at most 90% of the screen).
+SIDEBAR_WIDTH = SIDEBAR_MIN = 360
+
+
+def _without(css: str, rules: tuple[str, ...]) -> str:
+    for rule in rules:
+        if css.count(rule) != 1:
+            raise ValueError(f"sidebar rule not found once in a shared stylesheet: {rule!r}")
+        css = css.replace(rule, "")
+    return css
+
+
+def _main_css(mode: str) -> str:
+    return c1_theme.css_for(_without((APP_DIR / "ui_main.css").read_text(encoding="utf-8"), MAIN_SIDEBAR_RULES), mode)
 
 
 def _clone_css(mode: str) -> str:
-    return c1_theme.css_for(clone_stylesheet(), mode)
+    return c1_theme.css_for(_without(clone_stylesheet(), CLONE_SIDEBAR_RULES), mode)
 
 
 def sidebar_brand() -> None:
     st.markdown('<div class="dss-brand-row"><div class="dss-brand-mark">Rx</div><div>'
                 '<div class="dss-sidebar-brand">CDH Inventory DSS</div><div class="dss-sidebar-product">'
                 'Pharmaceutical decision<br>support</div></div></div>', unsafe_allow_html=True)
-    st.markdown('<div class="clone-sidebar-workspace">Hospital pharmacy workspace</div>', unsafe_allow_html=True)
 
 
-def nav_group(label: str, small: bool = False) -> None:
-    css = "dss-nav-group c1-panel" if small else "dss-nav-group"
-    st.markdown(f'<div class="{css}">{html.escape(label)}</div>', unsafe_allow_html=True)
+def nav_group(label: str) -> None:
+    """A sidebar group label; every group label has the same class, so the same look."""
+    st.markdown(f'<div class="dss-nav-group c1-nav-label">{html.escape(label)}</div>', unsafe_allow_html=True)
 
 
 def nav_button(title: str, key: str, active: bool) -> bool:
@@ -159,11 +198,10 @@ def nav_button(title: str, key: str, active: bool) -> bool:
     return st.button(title, key=key, type="primary" if active else "secondary", width="stretch")
 
 
-def topbar(title: str, badge: str | None, paths: list[str]) -> None:
-    """The top bar: the page title, the stock badge ("Stock as of Sep 2026") and the light/dark toggle."""
+def topbar(badge: str | None, paths: list[str]) -> None:
+    """The top bar: the stock badge ("Stock as of Sep 2026") and the light/dark toggle; the page title is in the
+    header card."""
     with st.container(key="c1-topbar", horizontal=True, vertical_alignment="center", gap="medium"):
-        st.markdown(f'<p class="c1-topbar-title" role="heading" aria-level="1">{html.escape(title)}</p>',
-                    unsafe_allow_html=True)
         if badge:
             st.markdown(f'<span class="c1-badge"><i></i>{html.escape(badge)}</span>', unsafe_allow_html=True)
         c1_theme.toggle(c1_theme.mode(), paths)
@@ -171,8 +209,8 @@ def topbar(title: str, badge: str | None, paths: list[str]) -> None:
 
 def page_header(eyebrow: str, title: str) -> None:
     st.markdown(f'<section class="dss-workspace-page-header"><div><div class="dss-workspace-eyebrow">'
-                f'{html.escape(eyebrow)}</div><div class="dss-workspace-heading">{html.escape(title)}</div></div>'
-                '</section>', unsafe_allow_html=True)
+                f'{html.escape(eyebrow)}</div><div role="heading" aria-level="1" class="dss-workspace-heading">'
+                f'{html.escape(title)}</div></div></section>', unsafe_allow_html=True)
 
 
 def footer() -> None:
@@ -257,6 +295,18 @@ def _styled(chart):
             .configure_legend(labelColor=ink, titleColor=ink, labelFontSize=13))
 
 
+MONTH_FORMAT = "%b %Y"                      # "Jan 2021", as c1_format.month
+
+
+def _months(values: pd.Series) -> pd.Series | None:
+    """Month labels ("2021-01", a month-end date) as the first day of each month, for a time axis; None when a value is
+    not a month."""
+    try:
+        return pd.PeriodIndex(values.astype(str).str[:7], freq="M").to_timestamp().to_series(index=values.index)
+    except (ValueError, TypeError):
+        return None
+
+
 def _long(data: pd.Series | pd.DataFrame, x: str) -> pd.DataFrame:
     frame = data.to_frame(data.name or "Value") if isinstance(data, pd.Series) else data
     frame = frame.reset_index()
@@ -271,13 +321,20 @@ def line_chart(data: pd.Series | pd.DataFrame, x: str = "Month", y_title: str | 
     frame = _long(data, x)
     colors = c1_theme.palette(c1_theme.mode())
     series = list(dict.fromkeys(frame.Series))
+    months = _months(frame[x])
+    if months is not None:                     # a time axis: "Jan 2021", a label every few months
+        frame[x] = months
+        axis_x = alt.X(f"{x}:T", axis=_axis(None, angle=0, label_format=MONTH_FORMAT))
+        tip_x = alt.Tooltip(f"{x}:T", format=MONTH_FORMAT)
+    else:
+        axis_x, tip_x = alt.X(f"{x}:O", axis=_axis(None, angle=-45)), x
     chart = alt.Chart(frame).mark_line(point=alt.OverlayMarkDef(size=18)).encode(
-        x=alt.X(f"{x}:O", axis=_axis(None, angle=-45)),
+        x=axis_x,
         y=alt.Y("Value:Q", axis=_axis(y_title)),
         color=alt.Color("Series:N", scale=alt.Scale(domain=series, range=colors[:len(series)]),
                         legend=alt.Legend(orient="bottom", title=None, labelLimit=0, columns=2) if len(series) > 1
                         else None),
-        tooltip=[x, "Series", alt.Tooltip("Value:Q", format=",.2f")])
+        tooltip=[tip_x, "Series", alt.Tooltip("Value:Q", format=",.2f")])
     st.altair_chart(_styled(chart.properties(height=320)), width="stretch")
 
 
@@ -288,6 +345,16 @@ def bar_chart(data: pd.Series, horizontal: bool = False, value_title: str | None
         return
     category = data.index.name or "Category"
     frame = data.rename("Value").rename_axis(category).reset_index()
+    months = _months(frame[category]) if category == "Month" and not horizontal else None
+    if months is not None:                     # bars over months: a time axis, "Jan 2021"
+        frame[category] = months
+        chart = alt.Chart(frame).mark_bar(color=c1_theme.token("teal", c1_theme.mode())).encode(
+            x=alt.X(f"yearmonth({category}):T", axis=_axis(None, angle=0, label_format=MONTH_FORMAT)),
+            y=alt.Y("Value:Q", axis=_axis(value_title, label_format=axis_format)),
+            tooltip=[alt.Tooltip(f"yearmonth({category}):T", title=category, format=MONTH_FORMAT),
+                     alt.Tooltip("Value:Q", format=value_format)]).properties(height=300)
+        st.altair_chart(_styled(chart), width="stretch")
+        return
     frame[category] = frame[category].astype(str)
     color = c1_theme.token("teal", c1_theme.mode())
     sort = order if order is not None else None
@@ -346,6 +413,13 @@ def show_table(frame: pd.DataFrame, key: str | None = None, link: bool = False, 
         if column == c1_format.label("Brand_Name") and 0 <= row < len(frame):
             return frame.Medicine_Key.iloc[row]
     return None
+
+
+def static_table(frame: pd.DataFrame, hide: tuple[str, ...] = ("Medicine_Key",)) -> None:
+    """A short table drawn in full (st.table): every row, long text wrapped, the height of its content; the display
+    labels and formats of c1_format."""
+    shown = frame[[c for c in frame.columns if c not in hide]]
+    st.table(c1_format.display(shown).hide(axis="index"), hide_index=True)
 
 
 def first_rows_table(frame: pd.DataFrame, key: str, rows: int = 10) -> None:
