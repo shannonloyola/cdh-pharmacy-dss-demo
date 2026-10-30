@@ -32,6 +32,8 @@ TOKENS = {                  # light values: the existing app's colours (app/ui_t
     "surface": "#ffffff", "sidebar": "#eff4f5", "teal": "#1f6f78", "teal-strong": "#145e59", "teal-soft": "#eaf3f3",
     "header-fill": "#eaf3f3", "amber": "#8f5a12", "amber-soft": "#fbf2dd", "red": "#b42318", "red-soft": "#fdecea",
     "on-teal": "#ffffff", "amber-cell": "#d9a441", "on-amber": "#14264a",
+    # three more action colours, each at least 3:1 against the surface in both modes (graphics)
+    "ochre": "#b26b00", "brown": "#7b4a26", "purple": "#7a2e8e",
 }
 # Text on a coloured fill stays dark in dark mode (the fill turns light): these tokens take their dark value here.
 DARK_OVERRIDES = {"on-amber": "#151a23"}

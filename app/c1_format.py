@@ -17,18 +17,48 @@ ABOVE_ROP = "above ROP"
 NEGATIVE = "stock record negative"
 NO_CONSUMPTION = "NO_CONSUMPTION"
 NO_DEMAND = "no demand expected (ROP 0 or next-month forecast below 0.5 units)"
-# The reorder statuses of build_planning.stock_status in plain words. The suggested actions group them: "Reorder now" is
-# below safety stock or at or below ROP; the other statuses need no order, except that a medicine with no 2025
-# consumption reads "Do not reorder" and a negative stock record "Check the stock record".
+# The one vocabulary of the pages, used by every card, tile, chart, filter and table.
+# Status: the reorder status of build_planning.stock_status in plain words.
 STATUS_TERMS = {
     BELOW_SS: "Below safety stock",
-    AT_ROP: "At or below ROP",
-    ABOVE_ROP: "Above ROP",
-    NO_DEMAND: "No demand expected (ROP 0 or next-month forecast below 0.5 units)",
-    NEGATIVE: "Stock record negative",
-    "no reorder point (input missing)": "No reorder point (input missing)",
+    AT_ROP: "At or below reorder point",
+    ABOVE_ROP: "Above reorder point",
+    NO_DEMAND: "No demand expected",
+    NEGATIVE: "Negative stock record",
+    "no reorder point (input missing)": "No demand expected",     # never in the data: no ROP is no order
 }
-STATUS_ORDER = list(STATUS_TERMS.values())
+STATUS_ORDER = list(dict.fromkeys(STATUS_TERMS.values()))
+# Action: what to do with the medicine; the quantity is the Suggested order column's.
+ORDER_URGENT, ORDER_NOW, ORDER_LIMITED = "Order now (urgent)", "Order now", "Order (limited by shelf life)"
+CONFIRM_SUPPLIER, CHECK_RECORD = "Confirm supplier (free goods)", "Check stock record"
+DO_NOT_REORDER, NO_ORDER = "Do not reorder", "No order needed"
+ACTIONS = [ORDER_URGENT, ORDER_NOW, ORDER_LIMITED, CONFIRM_SUPPLIER, CHECK_RECORD, DO_NOT_REORDER, NO_ORDER]
+# The colour of each action: red acts now, amber checks, teal and grey inform ("Do not reorder" is not red).
+ACTION_TOKENS = {ORDER_URGENT: "red", ORDER_NOW: "teal", ORDER_LIMITED: "ochre", CONFIRM_SUPPLIER: "brown",
+                 CHECK_RECORD: "purple", DO_NOT_REORDER: "muted", NO_ORDER: "line"}
+# The tone of an action's value on a tile: red acts now, amber checks.
+ACTION_TONES = {ORDER_URGENT: "red", ORDER_LIMITED: "amber", CONFIRM_SUPPLIER: "amber", CHECK_RECORD: "amber"}
+# Definitions, one plain sentence each, for the "?" tooltips.
+DEFINITIONS = {
+    "reorder point": "The stock level at which to order: expected use over the lead time plus safety stock.",
+    "safety stock": "Extra stock held against demand that runs above the forecast during the lead time, sized from "
+                    "how much monthly use varied in 2024-2025 from the medicine's first month with demand.",
+    "suggested order": "How much to order now: whole EOQ batches until stock is above the reorder point, no more "
+                       "than the medicine can use before it expires.",
+    "months of cover": "How many months stock on hand plus the suggested order lasts at next month's forecast.",
+    "shelf life": "The typical months from receipt to expiry in this medicine's own deliveries.",
+    "abc-ved category": "Category I needs the closest watch (class A or Vital), II normal control, III the least.",
+    "forecast reliability": "How closely the forecast model matched actual use in its test months.",
+    "slow-moving": "Stock on hand with no use in the last 3 months, or more than 6 months of stock at the last 12 "
+                   "months' use.",
+    "excess stock": "Stock above the reorder point plus one EOQ.",
+    "near-expiry": "Lots that expire within 180 days, counted up to the stock on hand.",
+    "planning estimate": "Uses lead time 7 days, ordering cost ₱500 per order and holding cost 30% a year. See "
+                         "Planning settings on Monthly Update.",
+    "limited planning estimate": "Forecast from simple averages only: the medicine's history is too short or too "
+                                 "disturbed by the pandemic for the advanced models.",
+}
+LIMITED = "Limited planning estimate"
 
 # Column labels. Columns not listed get their name with spaces and sentence case.
 LABELS = {
@@ -45,7 +75,7 @@ LABELS = {
     "Test_MAPE_Excluded_Zero_Months": "Test MAPE (zero months excluded)", "Test_WAPE": "Test WAPE",
     "Test_MASE": "Test MASE", "Prospective_2026_MAE": "2026 MAE (Jan-Sep)", "Volume_Class": "Volume class",
     "Limited_Planning_Estimate": "Limited planning estimate", "Forecast_Planning_Month": "Forecast, planning month",
-    "Planning_Label": "Label", "Suggested_Action": "Suggested action", "Medicine_Key": "Medicine key",
+    "Planning_Label": "Label", "Suggested_Action": "Action", "Medicine_Key": "Medicine key",
     "ABC_2021": "ABC 2021", "ABC_2022": "ABC 2022", "ABC_2023": "ABC 2023", "ABC_2024": "ABC 2024",
     "ABC_2025": "ABC 2025", "ABC_2021_2025": "ABC 2021-2025", "Demand_Last_12_Months": "Demand, last 12 months",
     "Months_Of_Cover": "Months of stock at last 12 months' use", "Slow_Moving": "Slow-moving",
@@ -71,7 +101,7 @@ LABELS = {
     "Expiry_From": "Expiry from", "Expiry_To": "Expiry to", "Min_Expiry": "Earliest expiry",
     "Max_Expiry": "Latest expiry", "Latest_Document_Date": "Latest document date", "Source_File": "Source file",
     "Item_ID": "Item ID", "Item_Description": "Item description", "Ending_Balance": "Ending balance",
-    "Measure_Group": "Measure group", "Order_Value": "Order value (suggested order x unit cost)", "KPI": "KPI",
+    "Measure_Group": "Measure group", "Order_Value": "Amount", "KPI": "KPI",
     "Input": "Assumption", "Replace_With": "Form item",
     "ABC_Class": "ABC class", "Medicine_Count": "Medicines", "Known_ACV": "Spending value",
     "Known_ACV_Share": "Share of spending value", "NON_MOVING": "Non-moving", "PERSISTENT_STABLE": "Persistent, stable",
@@ -106,6 +136,8 @@ DATES = {"First_Expiry", "Last_Expiry", "Expiration_Date", "Expiry_From", "Expir
          "Latest_Expiration_Date"}
 # Codes shown as words; acronyms stay as they are.
 VALUE_WORDS = {"NO_CONSUMPTION": "No consumption", "class NO_CONSUMPTION": "No consumption", "NAIVE": "Naive",
+               "Demand (illustrative)": "Demand change", "Demand (historical)": "History-based demand",
+               "EOQ cost range": "Ordering and holding cost",
                "SEASONAL_NAIVE": "Seasonal naive",
                "PROPHET": "Prophet", "HIGH": "High", "MODERATE": "Moderate", "LOW": "Low",
                "INTERMITTENT": "Intermittent", "PROXY": "Proxy", "PROPONENT": "Proponent",
@@ -117,7 +149,7 @@ ENUMS = {"Reorder_Status", "Stock_Status", "ABC_Planning", "Selected_Model", "Vo
          "Scenario_Type", "Suggested_Action", "Segment", "Behavior_Segment", "ABC_Class", "ABC_Eligibility"}
 NOT_AVAILABLE = "not available"
 NOT_CLASSED = "Not classed"                   # no 2025 consumption value: outside the ABC-VED matrix
-# The planning inputs (config/capstone1_planning_inputs.csv) by name; a grid point reads "Sensitivity grid: <input>
+# The planning inputs (config/capstone1_planning_inputs.csv) by name; a grid point reads "What if? range: <input>
 # (<n> of 3)".
 INPUT_LABELS = {"lead_time_days": "Lead time", "ordering_cost_php": "Ordering cost",
                 "ordering_cost_part_order_preparation": "Ordering cost: order preparation",
@@ -138,7 +170,7 @@ def input_label(name: object) -> object:
         return INPUT_LABELS[text]
     for prefix, words_ in GRID_INPUTS.items():
         if text.startswith(prefix + "_"):
-            return f"Sensitivity grid: {words_} ({text.rsplit('_', 1)[-1]} of 3)"
+            return f"What if? range: {words_} ({text.rsplit('_', 1)[-1]} of 3)"
     return name
 
 
@@ -199,6 +231,11 @@ def pesos(value: object) -> str:
     return NOT_AVAILABLE if _missing(value) else f"{PESO}{float(value):,.2f}"
 
 
+def pesos_whole(value: object) -> str:
+    """A headline peso amount (cards and tiles): whole pesos; tables keep the centavos."""
+    return NOT_AVAILABLE if _missing(value) else f"{PESO}{float(value):,.0f}"
+
+
 def share(value: object) -> str:
     if _missing(value):
         return NOT_AVAILABLE
@@ -250,6 +287,8 @@ def yes_no(value: object) -> str:
 
 
 def formatter(column: str, dtype) -> Callable[[object], object] | None:
+    if column in ("Year", "Month") and pd.api.types.is_numeric_dtype(dtype):
+        return lambda v: NOT_AVAILABLE if _missing(v) else f"{int(v)}"      # a year, not a quantity: no comma
     if column in WHOLE:
         return whole
     if column in ONE_DECIMAL:
@@ -281,7 +320,15 @@ def words(text: str) -> str:
     """A code as a word, also inside a sentence ("class NO_CONSUMPTION" -> "class no consumption")."""
     if text in VALUE_WORDS:
         return VALUE_WORDS[text]
-    return text.replace("NO_CONSUMPTION", "no consumption")
+    for code, plain in TEXT_WORDS.items():
+        text = text.replace(code, plain)
+    return text
+
+
+# Words inside mart texts said the pages' way ("the PHARMACY export" is the inventory report).
+TEXT_WORDS = {"NO_CONSUMPTION": "no consumption", "the PHARMACY export": "the inventory report",
+              "Expiry export months": "Expiry report months",
+              "a PHARMACY medicine": "a medicine in the inventory report", "PHARMACY": "inventory report"}
 
 
 def display(frame: pd.DataFrame):
@@ -296,6 +343,10 @@ def display(frame: pd.DataFrame):
         # nothing forecast: no months of cover, a blank cell (a value, so the column still sorts as numbers)
         zero = frame.Months_Of_Cover_With_Order.isna() & frame.Forecast_Planning_Month.le(0)
         frame = frame.assign(Months_Of_Cover_With_Order=frame.Months_Of_Cover_With_Order.mask(zero, math.inf))
+    if "Limited_Planning_Estimate" in frame:
+        # Limitation 7: its own narrow column, "Yes" on each baseline-only medicine, blank otherwise
+        limited = frame.Limited_Planning_Estimate.fillna(False).astype(bool)
+        frame = frame.assign(Limited_Planning_Estimate=limited.map({True: "Yes", False: ""}))
     if "Lot_No" in frame:                       # a lot number of 0 or blank was not recorded in the export
         lot = frame.Lot_No.astype(object)
         blank = lot.isna() | lot.astype(str).str.strip().isin(["", "0", "0.0"])
@@ -306,54 +357,51 @@ def display(frame: pd.DataFrame):
     return renamed.style.format({k: f for k, f in formats.items() if f is not None and k in renamed}, na_rep=NOT_AVAILABLE)
 
 
+def texts(frame: pd.DataFrame) -> pd.DataFrame:
+    """The text display() shows in each cell, by label (to size the columns)."""
+    styler = display(frame)
+    shown = {}
+    for column in styler.data.columns:
+        f = formatter(next((c for c in frame.columns if label(c) == column), column), styler.data[column].dtype)
+        values = styler.data[column]
+        shown[column] = [NOT_AVAILABLE if _missing(v) else str(f(v) if f else v) for v in values]
+    return pd.DataFrame(shown, index=styler.data.index)
+
+
 # ------------------------------------------------------------------ suggested action
 
-DO_NOT_REORDER, NO_DEMAND_ACTION, NO_ORDER, CHECK_RECORD = ("Do not reorder", "No demand expected", "No order needed",
-                                                          "Check the stock record")
-FREE_GOODS_ACTION = "Check supply source (received as free goods)"
 CAP_BELOW_ROP = "cap (below ROP need)"            # build_planning.BASIS_CAP_BELOW
-CAP_BELOW_ROP_REVIEW = "review: reorder point is more than it can use before expiry"
 
 
 def suggested_action(status: object, abc: object = None, quantity: object = None, stock: object = None,
-                     excess: object = None, free_goods: object = None, basis: object = None) -> str:
-    """The plain action of a medicine, restated from its existing reorder status, ABC class, suggested order (n x EOQ,
-    the (s, nQ) policy of the planning step), stock and excess-stock flag; the first that applies:
-    no plan row (not forecast) -> "Not planned (no forecast)"; below safety stock -> "Order urgently <suggested order>";
-    at or below ROP -> "Order <suggested order>", except that a medicine whose receipt lots all came at land cost 0
-    reads "Check supply source (received as free goods)" instead of a quantity, and an order capped below what lifts
-    stock above the ROP reads "Order <cap> – review: reorder point is more than it can use before expiry"; a negative
-    stock record -> "Check the
-    stock record"; no 2025
-    consumption with stock held, or
-    excess stock (above ROP + EOQ) -> "Do not reorder"; no demand expected (ROP 0 or a next-month forecast below 0.5
-    units) -> "No demand expected"; above ROP -> "No order needed".
-    """
+                     excess: object = None, free_goods: object = None, basis: object = None) -> str | None:
+    """The action of a medicine, restated from its reorder status, ABC class, stock, excess-stock and free-goods flags
+    and the basis of its suggested order; the first that applies: in reorder review, received as free goods ->
+    "Confirm supplier (free goods)"; in reorder review with the shelf-life cap below what lifts stock above the reorder
+    point -> "Order (limited by shelf life)"; below safety stock -> "Order now (urgent)"; at or below the reorder point
+    -> "Order now"; a negative stock record -> "Check stock record"; no 2025 consumption with stock held, or excess
+    stock -> "Do not reorder"; otherwise "No order needed". No plan row: no action (None). The quantity is the
+    Suggested order column's, not the action's."""
     if _missing(status):
-        return "Not planned (no forecast)"
-    amount = "" if _missing(quantity) else f" {float(quantity):,.0f}"
+        return None
     if status in REVIEW_STATUSES and not _missing(free_goods) and bool(free_goods):
-        return FREE_GOODS_ACTION
-    if status in REVIEW_STATUSES and basis == CAP_BELOW_ROP and amount:
-        return f"Order{amount} – {CAP_BELOW_ROP_REVIEW}"
+        return CONFIRM_SUPPLIER
+    if status in REVIEW_STATUSES and basis == CAP_BELOW_ROP:
+        return ORDER_LIMITED
     if status == BELOW_SS:
-        return f"Order urgently{amount}" if amount else "Order urgently (order quantity not available)"
+        return ORDER_URGENT
     if status == AT_ROP:
-        return f"Order{amount}" if amount else "Order (order quantity not available)"
+        return ORDER_NOW
     if status == NEGATIVE:
         return CHECK_RECORD
     held = not _missing(stock) and float(stock) > 0
     if (abc == NO_CONSUMPTION and held) or (not _missing(excess) and bool(excess)):
         return DO_NOT_REORDER
-    if status == NO_DEMAND:
-        return NO_DEMAND_ACTION
-    if status == "no reorder point (input missing)":
-        return "Check the inputs"
     return NO_ORDER
 
 
 def with_action(frame: pd.DataFrame, reorder: pd.DataFrame | None = None) -> pd.DataFrame:
-    """The frame with a Suggested_Action column as its second column. Status, EOQ, stock and the excess-stock flag come
+    """The frame with a Suggested_Action column as its second column. Status, suggested order, stock and the flags come
     from the frame itself or, when it lacks them, from the reorder table (by Medicine_Key)."""
     if not len(frame.columns):
         return frame

@@ -14,6 +14,8 @@ analytical logic.
 from __future__ import annotations
 
 import html
+import json
+import math
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,7 +28,7 @@ import streamlit as st
 import c1_format
 import c1_theme
 import ui_theme
-from ui_clone import _stylesheet as clone_stylesheet, clone_footer
+from ui_clone import _stylesheet as clone_stylesheet
 from ui_clone_table import clone_table
 
 APP_DIR = Path(__file__).resolve().parent
@@ -45,10 +47,11 @@ SVG_ICONS = {
     "attention": '<path d="M10 3 18 17H2L10 3Z"/><path d="M10 8v4M10 14h.01"/>',
     "warning": '<path d="M10 3 18 17H2L10 3Z"/><path d="M10 8v4M10 14h.01"/>',
     "cross": '<circle cx="10" cy="10" r="7"/><path d="m7 7 6 6M13 7l-6 6"/>',
+    "stop": '<circle cx="10" cy="10" r="7"/><path d="m7 7 6 6M13 7l-6 6"/>',
     "info": '<circle cx="10" cy="10" r="7"/><path d="M10 9v5M10 6h.01"/>',
 }
 # Status icons take the status colour; the others the teal of the existing tiles.
-ICON_TOKENS = {"check": "teal", "warning": "amber", "cross": "red", "attention": "amber"}
+ICON_TOKENS = {"check": "teal", "warning": "amber", "cross": "red", "attention": "amber", "stop": "muted"}
 
 # Page-button icons: the paths of app/ui_clone.py's sidebar icons.
 NAV_ICONS = {
@@ -66,17 +69,39 @@ NAV_ICONS = {
 C1_CSS = """
 [class*="st-key-clone-medicine-filters-"]{background:var(--c1-canvas);border:1px solid var(--c1-line);border-radius:12px;padding:14px 18px}
 [class*="st-key-clone-medicine-filters-"] [data-testid="stVerticalBlock"]{gap:0}
-[class*="st-key-c1-metric-grid-"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{flex:1 1 0%!important;min-width:0!important}
-[class*="st-key-c1-metric-grid-"] .dss-workspace-metric{min-height:150px}
+/* one spacing scale on every page: 24px between sections, 16px between tiles both ways, 16px from a section heading to
+   its content, 12px from tiles to the text below, 20px card padding; every tile row is one grid (tiles()), so the
+   tiles of a row share one height */
+.stApp .stMainBlockContainer > [data-testid="stVerticalBlock"]{gap:24px}
+/* Streamlit pulls every markdown block up by 16px to absorb a paragraph's margin; the blocks drawn here hold no
+   paragraph, so they keep their place and the scale holds */
+.stApp [data-testid="stMarkdownContainer"]:has(> :is(.c1-tiles,.c1-chip-row,.c1-card-title,.c1-legend,.dss-workspace-page-header,.clone-matrix,.c1-nav-divider)){margin-bottom:0}
+.c1-tiles{display:grid;grid-template-columns:repeat(var(--c1-cols),minmax(0,1fr));gap:16px;margin:0 0 -4px}
+.c1-tiles .dss-workspace-metric{height:100%;min-height:0;margin:0;box-sizing:border-box;padding:18px 20px}
 .dss-workspace-metric-value.c1-text{white-space:normal;overflow-wrap:anywhere;font-size:20px;line-height:1.25}
 .dss-workspace-metric-value.c1-long{font-size:17px}
+.dss-workspace-metric-value.c1-red{color:var(--c1-red)}
+.dss-workspace-metric-value.c1-amber{color:var(--c1-amber)}
 .c1-tile-caption{font:400 14px/1.4 Inter,sans-serif;color:var(--c1-muted);margin-top:6px}
-[class*="st-key-c1-card-"]{background:var(--c1-surface);border:1px solid var(--c1-line);border-radius:20px;box-shadow:0 3px 14px #14264a08;padding:30px;box-sizing:border-box}
-[class*="st-key-c1-card-"] > [data-testid="stVerticalBlock"]{gap:24px}
-.c1-card-title{font:600 26px/1.3 Inter,sans-serif;color:var(--c1-ink);letter-spacing:-.6px;border-bottom:1px solid var(--c1-line);margin:-8px -30px 0;padding:0 30px 20px}
+[class*="st-key-c1-card-"]{background:var(--c1-surface);border:1px solid var(--c1-line);border-radius:20px;box-shadow:0 3px 14px #14264a08;padding:20px;box-sizing:border-box}
+[class*="st-key-c1-card-"] > [data-testid="stVerticalBlock"]{gap:16px}
+.c1-card-title{font:600 22px/1.3 Inter,sans-serif;color:var(--c1-ink);letter-spacing:-.4px;border-bottom:1px solid var(--c1-line);margin:-4px -20px 0;padding:0 20px 16px}
 @media(min-width:901px){:is([class*="st-key-c1-"],[class*="st-key-clone-medicine-filters-"],[class*="st-key-clone-section-"]) [data-testid="stHorizontalBlock"]{flex-wrap:nowrap}}
-@media(max-width:1200px){[class*="st-key-c1-metric-grid-"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{flex:1 1 calc(50% - 22px)!important}}
-@media(max-width:600px){[class*="st-key-c1-metric-grid-"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{flex:1 1 100%!important}[class*="st-key-c1-card-"]{padding:16px}.c1-card-title{font-size:22px;margin:-4px -16px 0;padding:0 16px 16px}}
+@media(max-width:1200px){.c1-tiles{grid-template-columns:repeat(min(var(--c1-cols),2),minmax(0,1fr))}}
+@media(max-width:600px){.c1-tiles{grid-template-columns:minmax(0,1fr)}[class*="st-key-c1-card-"]{padding:16px}.c1-card-title{font-size:20px;margin:-4px -16px 0;padding:0 16px 16px}}
+/* the two labels: small neutral grey chips, no icon, the meaning in the tooltip */
+.c1-chip{display:inline-block;font:500 12px/1.5 Inter,sans-serif;color:var(--c1-muted);background:var(--c1-canvas);border:1px solid var(--c1-line);border-radius:999px;padding:1px 10px;cursor:help;white-space:nowrap}
+.c1-chip-row{display:flex;gap:8px;flex-wrap:wrap;margin:0}
+/* a definition: "?" with the sentence as its tooltip */
+.c1-help{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border:1px solid var(--c1-line);border-radius:50%;font:600 11px/1 Inter,sans-serif;color:var(--c1-muted);margin-left:6px;cursor:help;vertical-align:middle}
+/* the header card: the title and one line */
+.stApp .dss-workspace-page-header{height:auto!important;min-height:0!important;padding:26px 30px!important;margin:0!important}
+.stApp .dss-workspace-page-header .dss-workspace-heading{margin:0}
+.stApp .dss-workspace-page-header .dss-workspace-subtitle{margin-top:8px;font-size:18px;color:var(--c1-text)}
+/* the 100% stacked bar's legend */
+.c1-legend{display:flex;flex-wrap:wrap;gap:8px 20px;font:400 14px/1.4 Inter,sans-serif;color:var(--c1-text);margin:0}
+.c1-legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:baseline}
+.c1-legend strong{color:var(--c1-ink)}
 /* the top bar: the stock badge and the mode toggle, on the right. It spans the window under the sidebar (which is
    drawn above it), so it follows any sidebar width, collapsed or dragged, without moving */
 .st-key-c1-topbar{position:fixed;z-index:990;left:0;right:0;top:0;width:auto!important;height:64px;background:var(--c1-surface);border-bottom:1px solid var(--c1-line);padding:0 32px;box-sizing:border-box;flex-wrap:nowrap!important;align-items:center;justify-content:flex-end;gap:16px}
@@ -91,11 +116,12 @@ C1_CSS = """
 .c1-badge i{width:8px;height:8px;background:var(--c1-teal);border-radius:50%}
 @media(max-width:900px){.st-key-c1-topbar{padding:0 12px 0 64px;gap:8px}}
 @media(max-width:600px){.c1-badge{font-size:12px;padding:6px 9px}}
-/* the assumption line under the header */
-.stApp [data-testid="stMarkdownContainer"] p.c1-assumption{font:400 15px/1.5 Inter,sans-serif;color:var(--c1-text);margin:0}
-/* question cards: one height per row on wide screens, the button at the bottom */
-[class*="st-key-c1-question-"]{background:var(--c1-surface);border:1px solid var(--c1-line);border-radius:18px;padding:22px 24px;box-sizing:border-box}
-@media(min-width:1100px){[class*="st-key-c1-question-"]{min-height:292px}}
+/* question cards: one height per row, the button at the bottom */
+[class*="st-key-c1-question-"]{background:var(--c1-surface);border:1px solid var(--c1-line);border-radius:18px;padding:20px;box-sizing:border-box;height:100%}
+[class*="st-key-c1-questions-"] [data-testid="stHorizontalBlock"]{gap:16px;align-items:stretch}
+[class*="st-key-c1-questions-"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"]{height:100%}
+[class*="st-key-c1-questions-"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] > *{flex:1 1 auto}
+[class*="st-key-c1-question-"] > [data-testid="stVerticalBlock"]{height:100%}
 [class*="st-key-c1-question-"] > div:last-child{margin-top:auto}
 .stApp [data-testid="stMarkdownContainer"] p.c1-question{font:600 18px/1.35 Inter,sans-serif;color:var(--c1-ink);margin:0 0 6px}
 .stApp [data-testid="stMarkdownContainer"] p.c1-answer{font:700 32px/1.15 Inter,sans-serif;color:var(--c1-teal);letter-spacing:-.6px;margin:0 0 6px}
@@ -106,9 +132,15 @@ C1_CSS = """
 /* the ABC-VED matrix: the cell text keeps its contrast on the coloured fills (the markdown text rule would recolour it) */
 .stApp .clone-matrix-cell.strong, .stApp .clone-matrix-cell.strong strong, .stApp .clone-matrix-cell.strong span{color:var(--c1-on-teal)}
 .stApp .clone-matrix-cell.warm{background:var(--c1-amber-cell)}
+/* the matrix fits its card: the row header and four equal columns share the width, All VED included */
+.stApp .clone-matrix-row{grid-template-columns:96px repeat(4,minmax(0,1fr));gap:8px;min-width:0}
+.stApp .clone-matrix-cell{min-height:88px}
+.stApp .clone-matrix-cell strong{font-size:26px}
+.stApp .clone-matrix-head{font-size:15px}
 .stApp .clone-matrix-cell.warm, .stApp .clone-matrix-cell.warm strong, .stApp .clone-matrix-cell.warm span{color:var(--c1-on-amber)}
-/* the sidebar's group labels, "Inpatient pharmacy planning" and "For the panel": one style, one line */
-.stApp .dss-nav-group.c1-nav-label{font:600 11px/26px Inter,sans-serif;letter-spacing:.16em;color:var(--c1-muted);text-transform:uppercase;white-space:nowrap;margin:22px 18px 6px;max-width:none}
+/* the sidebar: the page buttons 8px apart, a thin divider before Analysis */
+.stApp [data-testid="stSidebar"] [data-testid="stVerticalBlock"]{gap:8px}
+.stApp .c1-nav-divider{border-top:1px solid var(--c1-line);margin:8px 18px}
 /* the sidebar: Streamlit's own width (it opens at SIDEBAR_WIDTH, st.set_page_config), drag handle and collapse
    control, above the top bar. Expanded, it keeps a floor (SIDEBAR_MIN, install_styles) so no label breaks; collapsed,
    it takes no room and the page widens. The reopen button sits in Streamlit's toolbar, which the shared stylesheets
@@ -160,9 +192,8 @@ MAIN_SIDEBAR_RULES = ("    min-width: 21.875rem !important;\n", "    width: 21.8
 CLONE_SIDEBAR_RULES = ("width:348px!important;min-width:348px!important;max-width:348px!important;",
                        '[data-testid="stSidebarHeader"]{height:20px;min-height:20px;padding:0 12px}\n',
                        '[data-testid="stSidebar"]{min-width:310px!important;max-width:310px!important;width:310px!important}')
-# The opening width and the floor: the longest label ("This month's decisions", 18px) needs 355px to stay on one line,
-# so the sidebar opens at 360px (348px before, where it took two) and can be dragged wider, not narrower (on a phone,
-# at most 90% of the screen).
+# The opening width and the floor: the brand line ("CDH Inventory DSS", 20px) needs 349px to stay on one line, so the
+# sidebar opens at 360px and can be dragged wider, not narrower (on a phone, at most 90% of the screen).
 SIDEBAR_WIDTH = SIDEBAR_MIN = 360
 
 
@@ -188,9 +219,9 @@ def sidebar_brand() -> None:
                 'Pharmaceutical decision<br>support</div></div></div>', unsafe_allow_html=True)
 
 
-def nav_group(label: str) -> None:
-    """A sidebar group label; every group label has the same class, so the same look."""
-    st.markdown(f'<div class="dss-nav-group c1-nav-label">{html.escape(label)}</div>', unsafe_allow_html=True)
+def nav_divider() -> None:
+    """The thin line before the Analysis page button."""
+    st.markdown('<div class="c1-nav-divider" role="separator"></div>', unsafe_allow_html=True)
 
 
 def nav_button(title: str, key: str, active: bool) -> bool:
@@ -207,14 +238,27 @@ def topbar(badge: str | None, paths: list[str]) -> None:
         c1_theme.toggle(c1_theme.mode(), paths)
 
 
-def page_header(eyebrow: str, title: str) -> None:
-    st.markdown(f'<section class="dss-workspace-page-header"><div><div class="dss-workspace-eyebrow">'
-                f'{html.escape(eyebrow)}</div><div role="heading" aria-level="1" class="dss-workspace-heading">'
-                f'{html.escape(title)}</div></div></section>', unsafe_allow_html=True)
+def page_header(title: str, line: str) -> None:
+    """The header card: the page title and one line saying what the page is for."""
+    st.markdown(f'<section class="dss-workspace-page-header"><div><div role="heading" aria-level="1" '
+                f'class="dss-workspace-heading">{html.escape(title)}</div>'
+                f'<div class="dss-workspace-subtitle">{html.escape(line)}</div></div></section>', unsafe_allow_html=True)
 
 
-def footer() -> None:
-    clone_footer()
+def help_icon(text: str) -> str:
+    """A "?" whose tooltip is the definition."""
+    return f'<span class="c1-help" title="{html.escape(text)}" aria-label="{html.escape(text)}">?</span>'
+
+
+def chip_html(label: str, tooltip: str) -> str:
+    return f'<span class="c1-chip" title="{html.escape(tooltip)}">{html.escape(label)}</span>'
+
+
+def chips(*items: tuple[str, str]) -> None:
+    """Small neutral chips (the planning-estimate labels) above a table or tile group."""
+    if items:
+        st.markdown('<div class="c1-chip-row">' + "".join(chip_html(*i) for i in items) + "</div>",
+                    unsafe_allow_html=True)
 
 
 def icon_svg(name: str, color: str | None = None, size: int = 20) -> str:
@@ -224,24 +268,30 @@ def icon_svg(name: str, color: str | None = None, size: int = 20) -> str:
             f'{SVG_ICONS.get(name, SVG_ICONS["info"])}</svg>')
 
 
-def tile_html(label: str, value: object, icon: str = "info", caption: str | None = None) -> str:
-    """One KPI tile (app/main.py's workspace_metric_card): icon, label, value as given, and an optional caption."""
+def tile_html(label: str, value: object, icon: str = "info", caption: str | None = None, help: str | None = None,
+              tone: str | None = None) -> str:
+    """One KPI tile (app/main.py's workspace_metric_card): icon, label (with a "?" definition), value as given, an
+    optional caption; tone "red" (act now) or "amber" (check) colours the value."""
     text = c1_format.count(value) if not isinstance(value, str) else value
-    tone = ("teal c1-text" + (" c1-long" if len(text) > 24 else "")) if any(c.isalpha() for c in text) else ""
+    kind = ("teal c1-text" + (" c1-long" if len(text) > 24 else "")) if any(c.isalpha() for c in text) else ""
+    kind += f" c1-{tone}" if tone in ("red", "amber") else ""
     note = f'<div class="c1-tile-caption">{html.escape(caption)}</div>' if caption else ""
+    tip = help_icon(help) if help else ""
     return (f'<section class="dss-workspace-metric"><div class="dss-workspace-metric-top">'
             f'<span class="dss-workspace-metric-icon">{icon_svg(icon)}</span></div>'
-            f'<div class="dss-workspace-metric-label">{html.escape(label)}</div>'
-            f'<div class="dss-workspace-metric-value {tone}">{html.escape(text)}</div>{note}</section>')
+            f'<div class="dss-workspace-metric-label">{html.escape(label)}{tip}</div>'
+            f'<div class="dss-workspace-metric-value {kind}">{html.escape(text)}</div>{note}</section>')
 
 
-def tiles(name: str, items: list[tuple]) -> None:
-    """A row of KPI tiles: (label, value), (label, value, icon) or (label, value, icon, caption)."""
+def tiles(name: str, items: list[tuple], columns: int | None = None) -> None:
+    """Every tile row of the pages: one grid, so the tiles of a row share one height and sit 16px apart both ways.
+    Items: (label, value[, icon[, caption[, help[, tone]]]]); columns: per row (default all, at most 4)."""
     if not items:
         return
+    cols = columns or min(len(items), 4)
     with st.container(key=f"c1-metric-grid-{name}"):
-        for column, item in zip(st.columns(len(items)), items):
-            column.markdown(tile_html(*item), unsafe_allow_html=True)
+        st.markdown(f'<div class="c1-tiles" style="--c1-cols:{cols}">' + "".join(tile_html(*i) for i in items)
+                    + "</div>", unsafe_allow_html=True)
 
 
 @contextmanager
@@ -263,13 +313,20 @@ def collapsible(name: str, title: str, expanded: bool = False) -> Iterator[None]
 
 def question_card(name: str, question: str, answer: str, detail: str, button: str = "Show me",
                   attention: bool = False, name_answer: bool = False) -> bool:
-    """A question card: the question, the answer up front, the detail (HTML) and a button; True when pressed."""
+    """A question card: the question, the answer up front, the detail (HTML) and a button; True when pressed. Red
+    (attention) only where something must be acted on now."""
     tone = " attention" if attention else (" c1-name" if name_answer else "")
     with st.container(key=f"c1-question-{name}"):
         st.markdown(f'<p class="c1-question">{html.escape(question)}</p>'
                     f'<p class="c1-answer{tone}">{html.escape(answer)}</p>'
                     f'<p class="c1-answer-detail">{detail}</p>', unsafe_allow_html=True)
         return st.button(button, key=f"show-{name}", type="primary")
+
+
+def question_row(name: str, count: int) -> list:
+    """A row of question cards, side by side at one height (a second row of two spans the full width)."""
+    with st.container(key=f"c1-questions-{name}"):
+        return list(st.columns(count, gap=None))
 
 
 # ------------------------------------------------------------------ charts
@@ -382,7 +439,101 @@ def bar_chart(data: pd.Series, horizontal: bool = False, value_title: str | None
     st.altair_chart(_styled(chart), width="stretch")
 
 
+def stacked_share_bar(counts: pd.Series, colors: dict[str, str]) -> None:
+    """One 100% stacked horizontal bar of the medicines by category (counts in order), its legend below with each
+    count; the legend sums to the total."""
+    counts = counts[counts > 0]
+    total = int(counts.sum())
+    if not total:
+        return
+    mode = c1_theme.mode()
+    frame = pd.DataFrame({"Action": counts.index, "Medicines": counts.to_numpy(),
+                          "Order": range(len(counts))})
+    frame["Share"] = frame.Medicines / total
+    palette = [c1_theme.token(colors.get(a, "muted"), mode) for a in frame.Action]
+    chart = alt.Chart(frame).mark_bar(height=36).encode(
+        x=alt.X("Share:Q", stack="normalize", axis=None),
+        color=alt.Color("Action:N", scale=alt.Scale(domain=list(frame.Action), range=palette), legend=None),
+        order=alt.Order("Order:Q"),
+        tooltip=["Action", alt.Tooltip("Medicines:Q", format=",.0f"), alt.Tooltip("Share:Q", format=".0%")]
+    ).properties(height=44)
+    st.altair_chart(_styled(chart), width="stretch")
+    items = "".join(f'<span><i style="background:{c}"></i>{html.escape(a)} <strong>{n:,}</strong></span>'
+                    for a, n, c in zip(frame.Action, frame.Medicines, palette))
+    st.markdown(f'<div class="c1-legend">{items}<span>Total <strong>{total:,}</strong></span></div>',
+                unsafe_allow_html=True)
+
+
+def range_chart(frame: pd.DataFrame, value_title: str) -> None:
+    """A tornado chart: one bar per factor from its lowest to its highest value (Factor, Low, High), the widest first,
+    each end labelled."""
+    if not len(frame):
+        return
+    mode = c1_theme.mode()
+    data = frame.assign(Span=frame.High - frame.Low).sort_values("Span", ascending=False)
+    order = data.Factor.tolist()
+    low, high = min(0.0, float(data.Low.min())), max(0.0, float(data.High.max()))
+    room = (high - low) * 0.12 or 1.0
+    base = alt.Chart(data).encode(y=alt.Y("Factor:N", sort=order, axis=_axis(None, limit=0)))
+    bars = base.mark_bar(color=c1_theme.token("teal", mode), height=22).encode(
+        x=alt.X("Low:Q", axis=_axis(value_title), scale=alt.Scale(domain=[low - room, high + room])), x2="High:Q",
+        tooltip=["Factor", alt.Tooltip("Low:Q", format=",.1f"), alt.Tooltip("High:Q", format=",.1f")])
+    ink = c1_theme.token("ink", mode)
+    left = base.mark_text(align="right", dx=-4, fontSize=13, color=ink).encode(
+        x="Low:Q", text=alt.Text("Low:Q", format="+,.1f"))
+    right = base.mark_text(align="left", dx=4, fontSize=13, color=ink).encode(
+        x="High:Q", text=alt.Text("High:Q", format="+,.1f"))
+    zero = alt.Chart(pd.DataFrame({"x": [0.0]})).mark_rule(color=c1_theme.token("muted", mode)).encode(x="x:Q")
+    st.altair_chart(_styled((bars + left + right + zero).properties(height=max(120, 44 * len(data)))), width="stretch")
+
+
 # ------------------------------------------------------------------ tables
+
+# The grids' font (Inter at 14px; headers at weight 600): each character's width in pixels, as Chrome measures it. Each
+# column is sized from all its text, not from glide's first 10 rows, so no cell or header is cut off.
+_GRID_FONT = json.loads((Path(__file__).resolve().parent / "c1_grid_font.json").read_text(encoding="utf-8"))
+GRID_NORMAL, GRID_BOLD = _GRID_FONT["normal"], _GRID_FONT["bold"]
+GRID_PADDING = 22          # glide's 8px on each side, and a margin
+GRID_MAX = 560             # a column with wider text wraps it (the longest medicine name fits)
+GRID_WRAP_ROW = 72         # the row height that wraps text (Streamlit wraps above 4rem)
+GRID_LINES = 2             # the lines a wrapped row shows in full
+
+
+def text_width(text: str, bold: bool = False) -> float:
+    table = GRID_BOLD if bold else GRID_NORMAL
+    return sum(table.get(c, 10.0) for c in text)
+
+
+def wrapped_lines(text: str, width: float) -> float:
+    """The lines a text takes, wrapped at spaces in the width (infinite when one word is wider)."""
+    lines, used, space = 1, 0.0, GRID_NORMAL[" "]
+    for word in text.split(" "):
+        size = text_width(word)
+        if size > width:
+            return math.inf
+        if used and used + space + size > width:
+            lines, used = lines + 1, size
+        else:
+            used += (space if used else 0) + size
+    return lines
+
+
+def fit_widths(texts: pd.DataFrame, widths: dict[str, int]) -> tuple[dict[str, int], bool]:
+    """Each column's width in pixels (at least the one asked, and the header's) so that every text shows whole: on one
+    line, or, past GRID_MAX, wrapped in GRID_LINES lines; and whether the rows must wrap."""
+    out, wrap = {}, False
+    for column in texts.columns:
+        values = {v for v in texts[column] if v}
+        longest = max((text_width(v) for v in values), default=0.0) + GRID_PADDING
+        width = max(widths.get(column) or min(longest, GRID_MAX), text_width(str(column), bold=True) + GRID_PADDING)
+        if longest > width:
+            wrap = True
+            long = [v for v in values if text_width(v) + GRID_PADDING > width]
+            while any(wrapped_lines(v, width - GRID_PADDING) > GRID_LINES for v in long):
+                width += 8
+        out[column] = math.ceil(width)
+    return out, wrap
+
 
 def show_table(frame: pd.DataFrame, key: str | None = None, link: bool = False, row_height: int | None = None,
                hide: tuple[str, ...] = ("Medicine_Key",), height: int | None = None,
@@ -393,9 +544,11 @@ def show_table(frame: pd.DataFrame, key: str | None = None, link: bool = False, 
     labels = [c1_format.label(c) for c in shown]
     options = {"hide_index": True, "column_order": list(dict.fromkeys(labels)), "width": "stretch",
                "placeholder": c1_format.NOT_AVAILABLE}
-    if widths:
-        options["column_config"] = {c1_format.label(c): st.column_config.Column(width=w) for c, w in widths.items()
-                                    if c in frame}
+    asked = {c1_format.label(c): w for c, w in (widths or {}).items() if c in frame}
+    fitted, wrap = fit_widths(c1_format.texts(frame[shown]), asked)
+    options["column_config"] = {c: st.column_config.Column(width=w) for c, w in fitted.items()}
+    if wrap:
+        row_height = max(row_height or 0, GRID_WRAP_ROW)
     if row_height:
         options["row_height"] = row_height
     if height:
@@ -438,8 +591,8 @@ MATRIX_TONES = {"I": "strong", "II": "warm", "III": "light"}
 
 
 def abc_ved_matrix(cells: pd.DataFrame) -> None:
-    """The ABC-VED matrix in the existing clone-matrix styles: a row per ABC class, a column per VED class and the row
-    total; each cell its medicines and its category (I teal, II amber, III light)."""
+    """The ABC-VED matrix in the existing clone-matrix styles: a row per ABC class, a column per VED class, the row
+    totals and a totals row; each cell its medicines and its category (I teal, II amber, III light)."""
     def cell(count, category, tone):
         return (f'<div class="clone-matrix-cell {tone}"><strong>{count:,}</strong>'
                 f'<span>{html.escape(category)}</span></div>')
@@ -452,6 +605,9 @@ def abc_ved_matrix(cells: pd.DataFrame) -> None:
                        MATRIX_TONES.get(part.Category.get(v), "empty")) for v in ("V", "E", "D")]
         rows.append(f'<div class="clone-matrix-row" role="row"><span role="rowheader">Class {abc}</span>'
                     + "".join(values) + cell(int(part.Medicines.sum()), "", "empty") + "</div>")
+    totals = [cell(int(cells[cells.VED.eq(v)].Medicines.sum()), "", "empty") for v in ("V", "E", "D")]
+    rows.append('<div class="clone-matrix-row" role="row"><span role="rowheader">All ABC</span>' + "".join(totals)
+                + cell(int(cells.Medicines.sum()), "", "empty") + "</div>")
     st.markdown(f'<div class="clone-matrix" role="table" aria-label="ABC-VED matrix">{head}{"".join(rows)}</div>',
                 unsafe_allow_html=True)
 
@@ -462,15 +618,21 @@ def _options(frame: pd.DataFrame, column: str | None) -> list[str]:
     return [ALL] + sorted(frame[column].dropna().astype(str).unique())
 
 
-def filter_bar(frame: pd.DataFrame, name: str, status: str | None = None) -> pd.DataFrame:
-    """The filter bar above a medicine list: search, status, priority (ABC class) and dosage form, each "All" until
-    chosen. A filter whose column the list does not have is shown disabled. Returns the rows that match."""
+def filter_bar(frame: pd.DataFrame, name: str, status: str | None = None, noun: str = "medicines") -> pd.DataFrame:
+    """The filter bar above a medicine list: search, priority (ABC class), dosage form and, where asked, status, each
+    "All" until chosen; then the count ("160 medicines", or "12 of 160 medicines" once filtered). A filter whose column
+    the list does not have is shown disabled. Returns the rows that match."""
     with st.container(key=f"clone-medicine-filters-{name}"):
-        search_col, status_col, priority_col, form_col = st.columns([2, 1.6, 1, 1.2])
+        if status:
+            search_col, status_col, priority_col, form_col = st.columns([2, 1.6, 1, 1.2])
+        else:
+            (search_col, priority_col, form_col), status_col = st.columns([2, 1, 1.2]), None
         search = search_col.text_input("Search medicine", key=f"{name}-search", placeholder="Brand or generic name")
         choices = {}
         for column, label, field in ((status_col, "Status", status), (priority_col, "Priority", "ABC_Planning"),
                                      (form_col, "Dosage form", "Dosage_Form")):
+            if column is None:
+                continue
             options = _options(frame, field)
             chosen = column.selectbox(label, options, key=f"{name}-{slug(label)}", disabled=len(options) == 1,
                                       format_func=lambda v: "(blank)" if v == "" else
@@ -486,5 +648,6 @@ def filter_bar(frame: pd.DataFrame, name: str, status: str | None = None) -> pd.
         for column in names:
             mask |= view[column].fillna("").astype(str).str.contains(search, case=False, regex=False)
         view = view[mask]
-    st.markdown(f"**{len(view):,}** of {len(frame):,} rows shown. Filters change this table only.")
+    shown = f"**{len(view):,}** {noun}" if len(view) == len(frame) else f"**{len(view):,}** of {len(frame):,} {noun}"
+    st.markdown(shown)
     return view
